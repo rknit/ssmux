@@ -11,7 +11,7 @@ import (
 var (
 	headerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 	cursorStyle = lipgloss.NewStyle().Reverse(true)
-	currentDot  = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Render("●")
+	dotStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
 	keyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
@@ -81,18 +81,22 @@ func (m Model) listLine(r Row, selected bool) string {
 	if r.Section == SectionPinned {
 		slot = fmt.Sprintf("%d  ", r.Session.Slot)
 	}
-	line := slot + r.Session.Name
+	// Each segment carries its own reverse when selected: a reset at the
+	// end of a styled segment would otherwise end the highlight.
+	style := func(s lipgloss.Style) lipgloss.Style { return s.Reverse(selected) }
+	text, dim := style(lipgloss.NewStyle()), style(dimStyle)
+	line := text.Render(slot + r.Session.Name)
 	if r.Session.Host != "" {
-		line += " " + dimStyle.Render("@"+r.Session.Host)
+		line += text.Render(" ") + dim.Render("@"+r.Session.Host)
 	}
 	if r.Session.Status != "" {
-		line += " " + dimStyle.Render("("+r.Session.Status+")")
+		line += text.Render(" ") + dim.Render("("+r.Session.Status+")")
 	}
 	if r.Current {
-		line += " " + currentDot
+		line += text.Render(" ") + style(dotStyle).Render("●")
 	}
 	if selected {
-		return "▸ " + cursorStyle.Render(line)
+		return "▸ " + line
 	}
 	return "  " + line
 }

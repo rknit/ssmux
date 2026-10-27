@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/rknit/ssmux/internal/fleet"
@@ -137,13 +138,14 @@ func (p *hostPickerDialog) view(m Model) string {
 				label += "  " + s
 			}
 		}
+		style := lipgloss.NewStyle()
 		if !it.pickable() && !it.manage {
-			label = dimStyle.Render(label)
+			style = dimStyle
 		}
 		if i == min(max(cur, 0), len(items)-1) {
-			lines = append(lines, "▸ "+cursorStyle.Render(label))
+			lines = append(lines, "▸ "+style.Reverse(true).Render(label))
 		} else {
-			lines = append(lines, "  "+label)
+			lines = append(lines, "  "+style.Render(label))
 		}
 	}
 	// Scroll so the cursor stays visible when the screen is short.
