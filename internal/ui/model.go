@@ -189,7 +189,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if time.Since(m.lastList) >= listInterval {
 			m.reload()
 		}
-		return m, tea.Batch(tick(), m.refreshPreview())
+		cmd := m.refreshPreview()
+		return m, tea.Batch(tick(), cmd)
 	case hostMsg:
 		m.reload()
 		if _, ok := m.host(msg.host); !ok {
@@ -295,14 +296,17 @@ func (m Model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode, m.target = modeConfirmKill, sel.Session.ID
 		}
 	case "n":
-		return m, m.startInput(modeNew, "")
+		cmd := m.startInput(modeNew, "")
+		return m, cmd
 	case "r":
 		if sel.Session.ID != "" {
 			m.target = sel.Session.ID
-			return m, m.startInput(modeRename, sel.Session.Name)
+			cmd := m.startInput(modeRename, sel.Session.Name)
+			return m, cmd
 		}
 	case "/":
-		return m, m.startInput(modeFilter, m.filter)
+		cmd := m.startInput(modeFilter, m.filter)
+		return m, cmd
 	case "q", "esc":
 		return m, tea.Quit
 	}
