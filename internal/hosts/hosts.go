@@ -20,7 +20,8 @@ func Path() string {
 	return filepath.Join(dir, "ssmux", "hosts")
 }
 
-// Load returns the destinations in path. A missing file yields nil.
+// Load returns the destinations in path, skipping comments and invalid
+// lines. A missing file yields nil.
 func Load(path string) ([]string, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -32,7 +33,7 @@ func Load(path string) ([]string, error) {
 	var out []string
 	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
+		if !strings.HasPrefix(line, "#") && validate(line) == nil {
 			out = append(out, line)
 		}
 	}
@@ -43,6 +44,10 @@ func validate(dest string) error {
 	switch {
 	case dest == "":
 		return errors.New("host is empty")
+	case strings.HasPrefix(dest, "-"):
+		return errors.New("host must not start with '-'")
+	case strings.HasPrefix(dest, "#"):
+		return errors.New("host must not start with '#'")
 	case strings.Contains(dest, "/"):
 		return errors.New("host must not contain '/'")
 	case strings.Contains(dest, ","):

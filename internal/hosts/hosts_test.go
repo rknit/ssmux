@@ -49,7 +49,7 @@ func TestAddRejects(t *testing.T) {
 	if err := Add(p, "box"); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{"ssh://h", "a b", "a,b", "", "box"} {
+	for _, d := range []string{"ssh://h", "a b", "a,b", "", "box", "-oProxyCommand=x", "#box"} {
 		if err := Add(p, d); err == nil {
 			t.Errorf("Add(%q) succeeded", d)
 		}
@@ -65,5 +65,14 @@ func TestRemoveKeepsComments(t *testing.T) {
 	b, _ := os.ReadFile(p)
 	if string(b) != "# c\nci\n" {
 		t.Fatalf("got %q", b)
+	}
+}
+
+func TestLoadSkipsInvalid(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "hosts")
+	write(t, p, "a\nb/c\nd,e\nf g\n-oX=y\ng\n")
+	got, err := Load(p)
+	if err != nil || !reflect.DeepEqual(got, []string{"a", "g"}) {
+		t.Fatalf("got %v, %v", got, err)
 	}
 }
