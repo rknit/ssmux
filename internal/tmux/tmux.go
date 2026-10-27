@@ -5,6 +5,7 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -69,7 +70,7 @@ func (c Client) Exec(cmd string) (string, error) {
 // run executes argv and returns trimmed stdout; errors carry stderr.
 func (c Client) run(argv []string) (string, error) {
 	if c.Host != "" {
-		if err := os.MkdirAll(sshDir(), 0o700); err != nil {
+		if err := ensureSSHDir(sshDir()); err != nil {
 			return "", err
 		}
 	}
@@ -79,11 +80,40 @@ func (c Client) run(argv []string) (string, error) {
 		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
 	}
-	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.WaitDelay = time.Second
-	if err := cmd.Run(); err != nil {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if c.Host != "" {
+		// ssh may fork a ControlMaster that keeps the inherited stdout and
+		// stderr open. With pipes, Wait would wait for it until WaitDelay;
+		// files let Wait return as soon as ssh exits.
+		outF, err := tempOutput()
+		if err != nil {
+			return "", err
+		}
+		defer outF.Close()
+		errF, err := tempOutput()
+		if err != nil {
+			return "", err
+		}
+		defer errF.Close()
+		cmd.Stdout, cmd.Stderr = outF, errF
+	}
+	err := cmd.Run()
+	if f, ok := cmd.Stdout.(*os.File); ok {
+		readOutput(f, &stdout)
+	}
+	if f, ok := cmd.Stderr.(*os.File); ok {
+		readOutput(f, &stderr)
+	}
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			if c.Host != "" {
+				return "", fmt.Errorf("ssh %s: timed out", c.Host)
+			}
+			return "", errors.New("timed out")
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()

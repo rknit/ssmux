@@ -3,6 +3,7 @@ package tmux_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,15 +44,38 @@ func TestRemoteQuoting(t *testing.T) {
 
 func TestRemoteTimeout(t *testing.T) {
 	ssh := filepath.Join(t.TempDir(), "slow")
-	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	c := tmux.Client{Host: "h", SSH: ssh, Timeout: 100 * time.Millisecond}
 	start := time.Now()
-	if _, err := c.ListSessions(); err == nil {
-		t.Error("expected error")
+	_, err := c.ListSessions()
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("err = %v, want timed out", err)
 	}
 	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %v", d)
+	}
+}
+
+// A first ssh call that forks a ControlMaster leaves a background process
+// holding the inherited stdout and stderr; the call must still return.
+func TestRemoteForkedMaster(t *testing.T) {
+	ssh := filepath.Join(t.TempDir(), "forking")
+	script := "#!/bin/sh\necho out\necho warn >&2\n(sleep 5) &\n"
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := tmux.Client{Host: "h", SSH: ssh, Timeout: 3 * time.Second}
+	start := time.Now()
+	out, err := c.Exec("true")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if out != "out" {
+		t.Errorf("out = %q", out)
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Errorf("took %v", d)
 	}
 }
