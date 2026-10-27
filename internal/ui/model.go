@@ -19,8 +19,11 @@ const (
 	listInterval    = time.Second
 )
 
-// Tmux is the subset of fleet.Fleet the picker uses. Only RefreshHost and
-// CapturePane may touch the network; the picker runs them as commands.
+// Tmux is the subset of fleet.Fleet the picker uses. RefreshHost and
+// CapturePane touch the network and the picker runs them as commands.
+// SwitchClient, NewSession, RenameSession and KillSession also run ssh
+// synchronously when given a remote host or ID, bounded by the remote
+// client's timeout.
 type Tmux interface {
 	Hosts() []fleet.HostStatus
 	RefreshHost(host string)
