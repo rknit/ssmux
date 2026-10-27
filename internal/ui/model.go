@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"maps"
 	"strings"
 	"time"
 
@@ -52,8 +53,11 @@ func tick() tea.Cmd {
 	return tea.Tick(previewInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// hostMsg reports that a host refresh finished.
-type hostMsg struct{ host string }
+// hostMsg reports that a refresh of host by its loop number gen finished.
+type hostMsg struct {
+	host string
+	gen  int
+}
 
 // previewMsg carries a capture of session id.
 type previewMsg struct {
@@ -61,11 +65,12 @@ type previewMsg struct {
 	err      error
 }
 
-// refreshHost refreshes host after delay and reports it with a hostMsg.
-func refreshHost(t Tmux, host string, delay time.Duration) tea.Cmd {
+// refreshHost refreshes host after delay and reports it with a hostMsg
+// from loop gen.
+func refreshHost(t Tmux, host string, gen int, delay time.Duration) tea.Cmd {
 	return tea.Tick(delay, func(time.Time) tea.Msg {
 		t.RefreshHost(host)
-		return hostMsg{host}
+		return hostMsg{host, gen}
 	})
 }
 
@@ -87,6 +92,11 @@ type Model struct {
 	err     string
 	preview string
 
+	// loops holds each host's current refresh loop number. Loops started by
+	// Init are 0; adding a host starts a new one, so a loop left over from
+	// before the host was removed stops at its next hostMsg.
+	loops map[string]int
+
 	width, height int
 	lastList      time.Time
 	capturing     bool // a capture command is in flight
@@ -106,7 +116,7 @@ func New(t Tmux, client string) Model {
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tick()}
 	for _, h := range m.hosts {
-		cmds = append(cmds, refreshHost(m.t, h.Name, 0))
+		cmds = append(cmds, refreshHost(m.t, h.Name, 0, 0))
 	}
 	return tea.Batch(cmds...)
 }
@@ -192,11 +202,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.refreshPreview()
 		return m, tea.Batch(tick(), cmd)
 	case hostMsg:
+		if msg.gen != m.loops[msg.host] {
+			return m, nil // superseded by a newer loop for a re-added host
+		}
 		m.reload()
 		if _, ok := m.host(msg.host); !ok {
 			return m, nil // host was removed
 		}
-		return m, refreshHost(m.t, msg.host, listInterval)
+		return m, refreshHost(m.t, msg.host, msg.gen, listInterval)
 	case previewMsg:
 		m.capturing = false
 		if msg.id != m.Selected().Session.ID {
@@ -251,6 +264,16 @@ func (m *Model) refreshPreview() tea.Cmd {
 	}
 }
 
+// startRefresh starts a new refresh loop for host, superseding any older one.
+func (m *Model) startRefresh(host string) tea.Cmd {
+	m.loops = maps.Clone(m.loops) // copies of m share the map
+	if m.loops == nil {
+		m.loops = map[string]int{}
+	}
+	m.loops[host]++
+	return refreshHost(m.t, host, m.loops[host], 0)
+}
+
 // host returns the status of the configured host named name.
 func (m Model) host(name string) (fleet.HostStatus, bool) {
 	for _, h := range m.hosts {
@@ -300,6 +323,9 @@ func (m Model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "n":
 		cmd := m.openNewSession()
+		return m, cmd
+	case "h":
+		cmd := m.openHostManager()
 		return m, cmd
 	case "r":
 		if sel.Session.ID != "" {

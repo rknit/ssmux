@@ -160,9 +160,9 @@ func TestHostPickerNested(t *testing.T) {
 	if len(m.dialogs) != 1 || newDialog(t, m).host != "box" {
 		t.Errorf("pick box: dialogs = %d host = %q", len(m.dialogs), newDialog(t, m).host)
 	}
-	m, _ = press(t, m, "space", "down", "down", "down", "enter") // Manage hosts… is a no-op for now
-	if len(m.dialogs) != 2 {
-		t.Errorf("manage: dialogs = %d", len(m.dialogs))
+	m, _ = press(t, m, "space", "down", "down", "down", "enter")
+	if _, ok := m.top().(*hostManagerDialog); !ok || len(m.dialogs) != 3 {
+		t.Errorf("manage: dialogs = %d top = %#v", len(m.dialogs), m.top())
 	}
 }
 

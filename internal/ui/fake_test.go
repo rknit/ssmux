@@ -25,6 +25,7 @@ type fakeTmux struct {
 	errs     map[string]error // method name -> error to return
 	capture  string
 	nextID   int
+	suggest  []string // ~/.ssh/config hosts; configured ones are left out
 }
 
 func newFake() *fakeTmux {
@@ -105,12 +106,18 @@ func (f *fakeTmux) RefreshHost(name string) {
 
 func (f *fakeTmux) AddHost(dest string) error {
 	f.record("AddHost %s", dest)
+	if err := f.errs["AddHost"]; err != nil {
+		return err
+	}
 	f.hosts = append(f.hosts, fleet.HostStatus{Name: dest})
 	return nil
 }
 
 func (f *fakeTmux) RemoveHost(name string) error {
 	f.record("RemoveHost %s", name)
+	if err := f.errs["RemoveHost"]; err != nil {
+		return err
+	}
 	for i, h := range f.hosts {
 		if h.Name == name {
 			f.hosts = append(f.hosts[:i], f.hosts[i+1:]...)
@@ -120,7 +127,15 @@ func (f *fakeTmux) RemoveHost(name string) error {
 	return nil
 }
 
-func (f *fakeTmux) Suggestions() []string { return nil }
+func (f *fakeTmux) Suggestions() []string {
+	var out []string
+	for _, s := range f.suggest {
+		if _, ok := f.hostStatus(s); !ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 func (f *fakeTmux) SetSlot(id string, slot int) error {
 	f.record("SetSlot %s %d", id, slot)

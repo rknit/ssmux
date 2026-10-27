@@ -46,7 +46,7 @@ type hostPickerDialog struct {
 
 // newHostPicker opens with the cursor on current.
 func newHostPicker(m Model, current string, onPick func(host string)) *hostPickerDialog {
-	p := &hostPickerDialog{onPick: onPick}
+	p := &hostPickerDialog{onPick: onPick, onManage: (*Model).openHostManager}
 	for i, it := range p.items(m) {
 		if !it.manage && it.name == current {
 			p.cursor = i

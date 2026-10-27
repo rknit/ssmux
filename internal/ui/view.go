@@ -45,7 +45,7 @@ func (m Model) footer() []string {
 	}
 	return []string{
 		keys("↑↓", "move", "⏎", "switch", "⇧↑↓", "reorder", "p", "pin", "n", "new"),
-		keys("r", "rename", "x", "kill", "/", "search", "q", "close"),
+		keys("r", "rename", "x", "kill", "h", "hosts", "/", "search", "q", "close"),
 	}
 }
 
