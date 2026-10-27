@@ -74,9 +74,7 @@ func TestViewFooter(t *testing.T) {
 func TestViewPreviewAndWidth(t *testing.T) {
 	f := newFake()
 	f.capture = strings.Repeat("x", 300) + "\nline two"
-	m := sized(New(f, "c"), 60, 20)
-	next, _ := m.Update(tickMsg{})
-	m = next.(Model)
+	m := tickPreview(t, sized(New(f, "c"), 60, 20))
 	out := plain(m)
 	if !strings.Contains(out, "line two") {
 		t.Errorf("preview not shown:\n%s", out)
@@ -96,4 +94,19 @@ func TestViewEmpty(t *testing.T) {
 	f.sessions = []tmux.Session{}
 	_ = plain(sized(New(f, "c"), 40, 10)) // must not panic
 	_ = plain(New(f, "c"))                // no size yet
+}
+
+func TestRemoteRowLabel(t *testing.T) {
+	f := newFake()
+	f.sessions = []tmux.Session{
+		{ID: "$1", Name: "loc", LastAttached: 50},
+		{ID: "box/$2", Name: "api", Host: "box", LastAttached: 40},
+	}
+	out := plain(sized(New(f, "c"), 100, 30))
+	if l := lineWith(out, "api"); !strings.Contains(l, "@box") {
+		t.Errorf("remote row = %q, want @box", l)
+	}
+	if l := lineWith(out, "loc"); strings.Contains(l, "@") {
+		t.Errorf("local row = %q has a host", l)
+	}
 }

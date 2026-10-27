@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/rknit/ssmux/internal/fleet"
 	"github.com/rknit/ssmux/internal/slots"
 	"github.com/rknit/ssmux/internal/tmux"
 )
@@ -17,8 +18,14 @@ const (
 	listInterval    = time.Second
 )
 
-// Tmux is the subset of tmux.Client the picker uses.
+// Tmux is the subset of fleet.Fleet the picker uses. Only RefreshHost and
+// CapturePane may touch the network; the picker runs them as commands.
 type Tmux interface {
+	Hosts() []fleet.HostStatus
+	RefreshHost(host string)
+	AddHost(dest string) error
+	RemoveHost(host string) error
+	Suggestions() []string
 	ListSessions() ([]tmux.Session, error)
 	SetSlot(id string, slot int) error
 	NewSession(host, name string) (string, error)
@@ -46,11 +53,29 @@ func tick() tea.Cmd {
 	return tea.Tick(previewInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// hostMsg reports that a host refresh finished.
+type hostMsg struct{ host string }
+
+// previewMsg carries a capture of session id.
+type previewMsg struct {
+	id, text string
+	err      error
+}
+
+// refreshHost refreshes host after delay and reports it with a hostMsg.
+func refreshHost(t Tmux, host string, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		t.RefreshHost(host)
+		return hostMsg{host}
+	})
+}
+
 type Model struct {
 	t      Tmux
 	client string
 
 	sessions []tmux.Session
+	hosts    []fleet.HostStatus
 	current  string
 	rows     []Row
 	cursor   int // index into rows; -1 when there are none
@@ -64,6 +89,7 @@ type Model struct {
 
 	width, height int
 	lastList      time.Time
+	capturing     bool // a capture command is in flight
 }
 
 // New loads the session list for client and puts the cursor on the first
@@ -75,7 +101,15 @@ func New(t Tmux, client string) Model {
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return tick() }
+// Init starts the preview tick and one refresh per host, so remote rows
+// appear as each host answers.
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{tick()}
+	for _, h := range m.hosts {
+		cmds = append(cmds, refreshHost(m.t, h.Name, 0))
+	}
+	return tea.Batch(cmds...)
+}
 
 // Selected returns the highlighted row, or a zero Row if the list is empty.
 func (m Model) Selected() Row {
@@ -96,7 +130,12 @@ func (m *Model) reload() {
 	if ss, err := m.t.ListSessions(); err == nil {
 		m.sessions = ss
 	}
-	m.rows = BuildRows(m.sessions, m.current, m.filter)
+	m.hosts = m.t.Hosts()
+	names := make([]string, len(m.hosts))
+	for i, h := range m.hosts {
+		names[i] = h.Name
+	}
+	m.rows = BuildRows(m.sessions, m.current, m.filter, names)
 	m.cursor = m.find(prev.Session.ID, prev.Section)
 }
 
@@ -150,8 +189,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if time.Since(m.lastList) >= listInterval {
 			m.reload()
 		}
-		m.refreshPreview()
-		return m, tick()
+		return m, tea.Batch(tick(), m.refreshPreview())
+	case hostMsg:
+		m.reload()
+		if _, ok := m.host(msg.host); !ok {
+			return m, nil // host was removed
+		}
+		return m, refreshHost(m.t, msg.host, listInterval)
+	case previewMsg:
+		m.capturing = false
+		if msg.id != m.Selected().Session.ID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.preview = ""
+			m.reload()
+			return m, nil
+		}
+		m.preview = msg.text
+		return m, nil
 	case tea.KeyPressMsg:
 		m.err = ""
 		switch m.mode {
@@ -168,19 +224,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) refreshPreview() {
-	sel := m.Selected()
-	if sel.Session.ID == "" {
+// refreshPreview returns a command capturing the selected session. An
+// unreachable row shows its host's error instead.
+func (m *Model) refreshPreview() tea.Cmd {
+	s := m.Selected().Session
+	switch {
+	case s.ID == "":
 		m.preview = ""
-		return
+		return nil
+	case s.Status == "unreachable":
+		h, _ := m.host(s.Host)
+		m.preview = h.Err
+		return nil
+	case m.capturing:
+		return nil
 	}
-	out, err := m.t.CapturePane(sel.Session.ID)
-	if err != nil {
-		m.preview = ""
-		m.reload()
-		return
+	m.capturing = true
+	t := m.t
+	return func() tea.Msg {
+		out, err := t.CapturePane(s.ID)
+		return previewMsg{id: s.ID, text: out, err: err}
 	}
-	m.preview = out
+}
+
+// host returns the status of the configured host named name.
+func (m Model) host(name string) (fleet.HostStatus, bool) {
+	for _, h := range m.hosts {
+		if h.Name == name {
+			return h, true
+		}
+	}
+	return fleet.HostStatus{}, false
+}
+
+// switchTo moves the client to s and quits, or shows why it can't.
+func (m Model) switchTo(s tmux.Session) (tea.Model, tea.Cmd) {
+	if s.ID == "" {
+		return m, nil
+	}
+	if s.Status == "unreachable" {
+		m.err = s.Host + " unreachable"
+		return m, nil
+	}
+	if err := m.t.SwitchClient(m.client, s.ID); err != nil {
+		m.err = err.Error()
+		return m, nil
+	}
+	return m, tea.Quit
 }
 
 func (m Model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -195,14 +285,7 @@ func (m Model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "shift+down", "J":
 		m.apply(slots.Move(m.sessions, sel.Session.ID, +1))
 	case "enter":
-		if sel.Session.ID == "" {
-			return m, nil
-		}
-		if err := m.t.SwitchClient(m.client, sel.Session.ID); err != nil {
-			m.err = err.Error()
-			return m, nil
-		}
-		return m, tea.Quit
+		return m.switchTo(sel.Session)
 	case "p":
 		if sel.Session.ID != "" {
 			m.mode = modePin
@@ -321,15 +404,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		m.reload()
 		return m, nil
 	case modeFilter:
-		sel := m.Selected().Session.ID
-		if sel == "" {
-			return m, nil
-		}
-		if err := m.t.SwitchClient(m.client, sel); err != nil {
-			m.err = err.Error()
-			return m, nil
-		}
-		return m, tea.Quit
+		return m.switchTo(m.Selected().Session)
 	}
 	return m, nil
 }

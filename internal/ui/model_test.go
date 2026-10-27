@@ -6,6 +6,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/rknit/ssmux/internal/fleet"
+	"github.com/rknit/ssmux/internal/tmux"
 )
 
 func TestInitialCursorOnFirstRecent(t *testing.T) {
@@ -102,16 +107,13 @@ func TestShiftArrowsReorder(t *testing.T) {
 
 func TestPreviewErrorClearsPreview(t *testing.T) {
 	f := newFake()
-	m := New(f, "c")
-	next, _ := m.Update(tickMsg{})
-	m = next.(Model)
+	m := tickPreview(t, New(f, "c"))
 	if m.preview != "preview text" {
 		t.Fatalf("preview = %q", m.preview)
 	}
 	f.errs["CapturePane"] = errors.New("can't find session")
 	f.sessions = f.sessions[:1] // highlighted session vanished
-	next, _ = m.Update(tickMsg{})
-	m = next.(Model)
+	m = tickPreview(t, m)
 	if m.preview != "" {
 		t.Errorf("preview = %q, want empty", m.preview)
 	}
@@ -294,5 +296,151 @@ func TestRenameEmptyRejected(t *testing.T) {
 	}
 	if m.mode != modeRename || !strings.Contains(m.render(), "name can't be empty") {
 		t.Errorf("mode = %v, render:\n%s", m.mode, plain(m))
+	}
+}
+
+func TestInitRefreshesHostsAsync(t *testing.T) {
+	f := newFake()
+	f.hosts = []fleet.HostStatus{{Name: "box"}, {Name: "ci"}}
+	f.after = map[string]fleet.HostStatus{"ci": {State: fleet.Unreachable, Err: "ssh: timeout"}}
+	f.sessions = append(f.sessions,
+		tmux.Session{ID: "box/$1", Name: "api", Host: "box", Slot: 5},
+		tmux.Session{ID: "box/$2", Name: "web", Host: "box"},
+		tmux.Session{ID: "ci/$1", Name: "build", Host: "ci", Slot: 6},
+	)
+	m := sized(New(f, "c"), 100, 30)
+	if f.called("RefreshHost") {
+		t.Fatalf("New waited on hosts: %v", f.calls)
+	}
+	out := plain(m)
+	if !strings.Contains(lineWith(out, "api"), "(connecting)") {
+		t.Errorf("pinned remote row not connecting:\n%s", out)
+	}
+	if strings.Contains(out, "web") {
+		t.Errorf("unpinned row of a loading host shown:\n%s", out)
+	}
+
+	var hostMsgs []hostMsg
+	for _, msg := range msgs(m.Init()) {
+		if h, ok := msg.(hostMsg); ok {
+			hostMsgs = append(hostMsgs, h)
+		}
+	}
+	if len(hostMsgs) != 2 {
+		t.Fatalf("hostMsgs = %v, want one per host", hostMsgs)
+	}
+	for _, h := range hostMsgs {
+		var cmd tea.Cmd
+		m, cmd = update(m, h)
+		if cmd == nil {
+			t.Errorf("no next refresh scheduled for %s", h.host)
+		}
+	}
+	out = plain(m)
+	if l := lineWith(out, "api"); strings.Contains(l, "(") {
+		t.Errorf("connected row still has a status: %q", l)
+	}
+	if !strings.Contains(out, "web") {
+		t.Errorf("connected host rows missing:\n%s", out)
+	}
+	if !strings.Contains(lineWith(out, "build"), "(unreachable)") {
+		t.Errorf("unreachable row not labelled:\n%s", out)
+	}
+}
+
+func TestHostMsgForRemovedHostStops(t *testing.T) {
+	f := newFake()
+	_, cmd := update(New(f, "c"), hostMsg{host: "gone"})
+	if cmd != nil {
+		t.Errorf("refresh scheduled for a host that is no longer configured")
+	}
+}
+
+// remoteFake has a local current session and an unreachable pinned box row
+// that the cursor starts on.
+func remoteFake() *fakeTmux {
+	f := newFake()
+	f.sessions = []tmux.Session{
+		{ID: "$1", Name: "loc", LastAttached: 50},
+		{ID: "box/$1", Name: "api", Host: "box", Slot: 1, LastAttached: 10},
+	}
+	f.hosts = []fleet.HostStatus{{Name: "box", State: fleet.Unreachable, Err: "ssh: connect to host box: timeout"}}
+	return f
+}
+
+func TestEnterOnUnreachableRow(t *testing.T) {
+	f := remoteFake()
+	m := New(f, "c")
+	if r := m.Selected(); r.Session.Status != "unreachable" {
+		t.Fatalf("selected %+v", r)
+	}
+	m, cmd := press(t, m, "enter")
+	if m.err != "box unreachable" {
+		t.Errorf("err = %q", m.err)
+	}
+	if f.called("SwitchClient") || isQuit(cmd) {
+		t.Errorf("calls = %v quit = %v", f.calls, isQuit(cmd))
+	}
+
+	m, _ = press(t, New(f, "c"), "/")
+	m = typeText(t, m, "api")
+	m, cmd = press(t, m, "enter")
+	if m.err != "box unreachable" || f.called("SwitchClient") || isQuit(cmd) {
+		t.Errorf("search enter: err = %q calls = %v", m.err, f.calls)
+	}
+}
+
+func TestPreviewAsync(t *testing.T) {
+	f := newFake()
+	m := New(f, "c")
+	sel := m.Selected().Session.ID
+	m, cmd := update(m, tickMsg{})
+	if m.preview != "" || f.called("CapturePane") {
+		t.Fatalf("tick captured synchronously: preview = %q calls = %v", m.preview, f.calls)
+	}
+	var got []previewMsg
+	for _, msg := range msgs(cmd) {
+		if p, ok := msg.(previewMsg); ok {
+			got = append(got, p)
+		}
+	}
+	if len(got) != 1 || got[0].id != sel || got[0].text != "preview text" {
+		t.Fatalf("previewMsgs = %+v", got)
+	}
+	m, _ = update(m, previewMsg{id: "$4", text: "stale"})
+	if m.preview != "" {
+		t.Errorf("stale preview applied: %q", m.preview)
+	}
+	m, _ = update(m, got[0])
+	if m.preview != "preview text" {
+		t.Errorf("preview = %q", m.preview)
+	}
+
+	r := remoteFake()
+	m = tickPreview(t, New(r, "c"))
+	if r.called("CapturePane") {
+		t.Errorf("captured an unreachable row: %v", r.calls)
+	}
+	if m.preview != "ssh: connect to host box: timeout" {
+		t.Errorf("unreachable preview = %q", m.preview)
+	}
+}
+
+func TestKillCurrentRemoteSwitchesAway(t *testing.T) {
+	f := newFake()
+	f.sessions = []tmux.Session{
+		{ID: "$1", Name: "foo", LastAttached: 50},
+		{ID: "box/$3", Name: "api", Host: "box", LastAttached: 60},
+	}
+	f.current = "box/$3"
+	m := New(f, "c")
+	m, _ = press(t, m, "down", "down") // UNPINNED: foo, api
+	if id := m.Selected().Session.ID; id != "box/$3" {
+		t.Fatalf("selected %q", id)
+	}
+	press(t, m, "x", "y")
+	want := []string{"SwitchClient c $1", "KillSession box/$3"}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Errorf("calls = %v, want %v", f.calls, want)
 	}
 }

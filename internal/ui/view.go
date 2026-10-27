@@ -78,6 +78,12 @@ func (m Model) listLine(r Row, selected bool) string {
 		slot = fmt.Sprintf("%d  ", r.Session.Slot)
 	}
 	line := slot + r.Session.Name
+	if r.Session.Host != "" {
+		line += " " + dimStyle.Render("@"+r.Session.Host)
+	}
+	if r.Session.Status != "" {
+		line += " " + dimStyle.Render("("+r.Session.Status+")")
+	}
 	if r.Current {
 		line += " " + currentDot
 	}

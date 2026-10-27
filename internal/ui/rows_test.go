@@ -37,7 +37,7 @@ func sampleSessions() []tmux.Session {
 }
 
 func TestRowsSections(t *testing.T) {
-	got := view(BuildRows(sampleSessions(), "$1", ""))
+	got := view(BuildRows(sampleSessions(), "$1", "", nil))
 	want := []rowView{
 		{Header: true, Section: SectionRecent},
 		{Section: SectionRecent, Name: "api-server"},
@@ -58,7 +58,7 @@ func TestRowsSections(t *testing.T) {
 
 func TestRowsEmptySectionHasNoHeader(t *testing.T) {
 	ss := []tmux.Session{{ID: "$1", Name: "a", LastAttached: 2}, {ID: "$2", Name: "b", LastAttached: 1}}
-	for _, r := range BuildRows(ss, "$1", "") {
+	for _, r := range BuildRows(ss, "$1", "", nil) {
 		if r.Section == SectionPinned {
 			t.Errorf("unexpected pinned row %+v", r)
 		}
@@ -66,7 +66,7 @@ func TestRowsEmptySectionHasNoHeader(t *testing.T) {
 }
 
 func TestRowsFilter(t *testing.T) {
-	for _, r := range BuildRows(sampleSessions(), "$1", "API") {
+	for _, r := range BuildRows(sampleSessions(), "$1", "API", nil) {
 		if !r.Header && r.Session.Name != "api-server" && r.Session.Name != "api-client" {
 			t.Errorf("filter kept %q", r.Session.Name)
 		}
@@ -74,7 +74,7 @@ func TestRowsFilter(t *testing.T) {
 }
 
 func TestRowsSingleSession(t *testing.T) {
-	rows := BuildRows([]tmux.Session{{ID: "$1", Name: "only"}}, "$1", "")
+	rows := BuildRows([]tmux.Session{{ID: "$1", Name: "only"}}, "$1", "", nil)
 	for _, r := range rows {
 		if r.Section == SectionRecent {
 			t.Errorf("recent should be empty: %+v", r)
@@ -86,5 +86,49 @@ func TestRowsSingleSession(t *testing.T) {
 	}
 	if FirstSelectable(nil) != -1 {
 		t.Errorf("FirstSelectable(nil) != -1")
+	}
+}
+
+func TestUnpinnedOrder(t *testing.T) {
+	ss := []tmux.Session{
+		{ID: "ci/$1", Name: "bb", Host: "ci"},
+		{ID: "box/$1", Name: "aa", Host: "box"},
+		{ID: "$1", Name: "zz"},
+	}
+	names := func(hosts []string) []string {
+		var out []string
+		for _, r := range BuildRows(ss, "", "", hosts) {
+			if !r.Header && r.Section == SectionUnpinned {
+				out = append(out, r.Session.Name)
+			}
+		}
+		return out
+	}
+	if got, want := names([]string{"box", "ci"}), []string{"zz", "aa", "bb"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got, want := names([]string{"ci", "box"}), []string{"zz", "bb", "aa"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("config order: got %v, want %v", got, want)
+	}
+}
+
+func TestFilterMatchesHost(t *testing.T) {
+	ss := []tmux.Session{
+		{ID: "$1", Name: "zz"},
+		{ID: "box/$1", Name: "aa", Host: "box"},
+		{ID: "ci/$1", Name: "bb", Host: "ci"},
+	}
+	kept := 0
+	for _, r := range BuildRows(ss, "", "BOX", []string{"box", "ci"}) {
+		if r.Header {
+			continue
+		}
+		kept++
+		if r.Session.Host != "box" {
+			t.Errorf("filter kept %+v", r.Session)
+		}
+	}
+	if kept == 0 {
+		t.Errorf("filter dropped the box rows")
 	}
 }

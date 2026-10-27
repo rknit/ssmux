@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -26,15 +27,26 @@ type Row struct {
 }
 
 // BuildRows lays out RECENT (newest 3, excluding the current session),
-// PINNED (occupied slots only, by slot) and UNPINNED (by name). Sections
-// with no sessions get no header. filter matches names case-insensitively.
-func BuildRows(ss []tmux.Session, currentID, filter string) []Row {
+// PINNED (occupied slots only, by slot) and UNPINNED (local sessions, then
+// each host's in hosts order, by name). Sections with no sessions get no
+// header. filter matches names or hosts case-insensitively.
+func BuildRows(ss []tmux.Session, currentID, filter string, hosts []string) []Row {
 	filter = strings.ToLower(filter)
 	var kept []tmux.Session
 	for _, s := range ss {
-		if strings.Contains(strings.ToLower(s.Name), filter) {
+		if strings.Contains(strings.ToLower(s.Name), filter) || strings.Contains(strings.ToLower(s.Host), filter) {
 			kept = append(kept, s)
 		}
+	}
+	// rank orders hosts: local first, then config order, then unknown hosts.
+	rank := func(host string) int {
+		if host == "" {
+			return 0
+		}
+		if i := slices.Index(hosts, host); i >= 0 {
+			return i + 1
+		}
+		return len(hosts) + 1
 	}
 
 	var recent, pinned, unpinned []tmux.Session
@@ -51,7 +63,16 @@ func BuildRows(ss []tmux.Session, currentID, filter string) []Row {
 	sort.SliceStable(recent, func(i, j int) bool { return recent[i].LastAttached > recent[j].LastAttached })
 	recent = recent[:min(len(recent), recentCount)]
 	sort.SliceStable(pinned, func(i, j int) bool { return pinned[i].Slot < pinned[j].Slot })
-	sort.SliceStable(unpinned, func(i, j int) bool { return unpinned[i].Name < unpinned[j].Name })
+	sort.SliceStable(unpinned, func(i, j int) bool {
+		a, b := unpinned[i], unpinned[j]
+		if ra, rb := rank(a.Host), rank(b.Host); ra != rb {
+			return ra < rb
+		}
+		if a.Host != b.Host {
+			return a.Host < b.Host
+		}
+		return a.Name < b.Name
+	})
 
 	var rows []Row
 	add := func(sec Section, list []tmux.Session) {
