@@ -39,6 +39,8 @@ type host struct {
 	names    map[string]string // id -> last known name
 	gen      int               // bumped by each switch to one of its sessions
 	switched map[string]switched
+	started  int // refreshes started
+	applied  int // sequence number of the newest refresh applied
 }
 
 // Fleet merges the local tmux server with every configured ssh host and
@@ -96,14 +98,18 @@ func (f *Fleet) Hosts() []HostStatus {
 // RefreshHost lists the host's sessions over ssh and caches the result.
 // It blocks for up to the remote client's Timeout.
 func (f *Fleet) RefreshHost(name string) {
-	gen := f.gen(name)
+	seq, gen, ok := f.startRefresh(name)
+	if !ok {
+		return
+	}
 	ss, err := f.remote(name).ListSessions()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h := f.host(name)
-	if h == nil {
-		return
+	if h == nil || seq < h.applied {
+		return // a refresh that started later already applied
 	}
+	h.applied = seq
 	if err != nil {
 		h.State, h.Err, h.sessions = Unreachable, err.Error(), nil
 		return

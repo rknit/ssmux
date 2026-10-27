@@ -208,64 +208,115 @@ func TestSwitchUncachedSession(t *testing.T) {
 	}
 }
 
+// slowRefresh is a fleet whose next RefreshHost, once armed, lists the
+// sessions and then waits for resume before returning the listing.
+type slowRefresh struct {
+	f      *fleet.Fleet
+	client string
+	dir    string
+	slow   atomic.Value // "" or the directory of the armed refresh
+}
+
+func newSlowRefresh(t *testing.T, e *env) *slowRefresh {
+	t.Helper()
+	r := &slowRefresh{dir: t.TempDir()}
+	r.slow.Store("")
+	r.f = fleet.New(e.local, e.hostsPath, "", func(h string) tmux.Client {
+		c := e.remote(h)
+		if d := r.slow.Swap(""); d != "" {
+			c.SSH = filepath.Join(d.(string), "ssh")
+		}
+		return c
+	})
+	r.f.Term = "xterm-256color"
+	r.f.RefreshHost("box")
+	r.client, _ = attach(t, e.local, "base")
+	return r
+}
+
+// start begins a slow refresh of box in the background, waits until it has
+// listed, and returns a function that lets it finish and waits for it.
+func (r *slowRefresh) start(t *testing.T, e *env, name string) (finish func()) {
+	t.Helper()
+	d := filepath.Join(r.dir, name)
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	listed, resume := filepath.Join(d, "listed"), filepath.Join(d, "resume")
+	script := "#!/bin/sh\nout=$(" + e.remote("box").SSH + " \"$@\")\ntouch " + listed +
+		"\nwhile [ ! -f " + resume + " ]; do sleep 0.02; done\nprintf '%s\\n' \"$out\"\n"
+	if err := os.WriteFile(filepath.Join(d, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.slow.Store(d)
+	done := make(chan struct{})
+	go func() { r.f.RefreshHost("box"); close(done) }()
+	eventually(t, func() bool { _, err := os.Stat(listed); return err == nil })
+	return func() {
+		t.Helper()
+		if err := os.WriteFile(resume, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		<-done
+	}
+}
+
+// switchFresh creates a box session through the fleet and switches to it.
+func (r *slowRefresh) switchFresh(t *testing.T) string {
+	t.Helper()
+	q := must(t)(r.f.NewSession("box", "fresh"))
+	if err := r.f.SwitchClient(r.client, q); err != nil {
+		t.Fatal(err)
+	}
+	return q
+}
+
+func (r *slowRefresh) checkKept(t *testing.T, e *env, q string) {
+	t.Helper()
+	_, id := fleet.Split(q)
+	if es := fleet.ParseEntries(option(t, e.local, recentOpt)); len(es) != 1 || es[0].ID != id {
+		t.Errorf("%s = %+v", recentOpt, es)
+	}
+	if got, ok := find(list(t, r.f), q); !ok || got.LastAttached == 0 {
+		t.Errorf("listed %+v, ok=%v", got, ok)
+	}
+}
+
 // TestRefreshOlderThanSwitchKeepsRecent runs a refresh whose listing was
 // taken before a switch to a new session, and checks the refresh doesn't
 // drop the switch's recent entry.
 func TestRefreshOlderThanSwitchKeepsRecent(t *testing.T) {
 	e := newEnv(t)
-	e.remote("box")
-	dir := t.TempDir()
-	listed, resume := filepath.Join(dir, "listed"), filepath.Join(dir, "resume")
-	slowSSH := filepath.Join(dir, "ssh")
-	real := e.remote("box").SSH
-	script := "#!/bin/sh\nout=$(" + real + " \"$@\")\ntouch " + listed +
-		"\nwhile [ ! -f " + resume + " ]; do sleep 0.02; done\nprintf '%s\\n' \"$out\"\n"
-	if err := os.WriteFile(slowSSH, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var slow atomic.Bool
-	f := fleet.New(e.local, e.hostsPath, "", func(h string) tmux.Client {
-		c := e.remote(h)
-		if slow.CompareAndSwap(true, false) {
-			c.SSH = slowSSH
-		}
-		return c
-	})
-	f.Term = "xterm-256color"
-	f.RefreshHost("box")
-	client, _ := attach(t, e.local, "base")
+	r := newSlowRefresh(t, e)
+	finish := r.start(t, e, "a")
+	q := r.switchFresh(t)
+	finish()
+	r.checkKept(t, e, q)
 
-	slow.Store(true)
-	done := make(chan struct{})
-	go func() { f.RefreshHost("box"); close(done) }()
-	eventually(t, func() bool { _, err := os.Stat(listed); return err == nil })
-	q := must(t)(f.NewSession("box", "fresh"))
-	if err := f.SwitchClient(client, q); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(resume, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	<-done
-
-	_, id := fleet.Split(q)
-	if es := fleet.ParseEntries(option(t, e.local, recentOpt)); len(es) != 1 || es[0].ID != id {
-		t.Errorf("%s = %+v", recentOpt, es)
-	}
-	if got, ok := find(list(t, f), q); !ok || got.LastAttached == 0 {
-		t.Errorf("listed %+v, ok=%v", got, ok)
-	}
 	// A refresh that starts after the switch is authoritative again.
+	_, id := fleet.Split(q)
 	if _, err := e.remote("box").Run("kill-session", "-t", id); err != nil {
 		t.Fatal(err)
 	}
-	f.RefreshHost("box")
-	if _, ok := find(list(t, f), q); ok {
+	r.f.RefreshHost("box")
+	if _, ok := find(list(t, r.f), q); ok {
 		t.Error("killed session still listed")
 	}
 	if v := option(t, e.local, recentOpt); v != "" {
 		t.Errorf("%s = %q", recentOpt, v)
 	}
+}
+
+// TestOverlappingRefreshesKeepRecent finishes a refresh begun before a
+// switch after a later refresh that already saw the switched session.
+func TestOverlappingRefreshesKeepRecent(t *testing.T) {
+	e := newEnv(t)
+	r := newSlowRefresh(t, e)
+	finishA := r.start(t, e, "a")
+	q := r.switchFresh(t)
+	r.f.RefreshHost("box")
+	finishA()
+	r.checkKept(t, e, q)
 }
 
 func TestClientSessionMapsWrapper(t *testing.T) {
@@ -323,6 +374,30 @@ func TestWrapperAttachesRemote(t *testing.T) {
 		cs, _ := s.remote("box").Run("list-clients", "-F", "#{session_id}")
 		return cs == s.id
 	})
+}
+
+func TestDeadWrapperReplaced(t *testing.T) {
+	s := newSwitchEnv(t)
+	if _, err := s.local.Run("set-option", "-g", "remain-on-exit", "on"); err != nil {
+		t.Fatal(err)
+	}
+	dead := must(t)(s.local.Run("new-session", "-d", "-P", "-F", "#{session_id}", "-s", "_ssmux_1", "exit 1",
+		";", "set-option", "@ssmux-remote", s.tag()))
+	eventually(t, func() bool {
+		v, _ := s.local.Run("display", "-p", "-t", dead, "#{pane_dead}")
+		return v == "1"
+	})
+	s.switchTo(t)
+	w := s.wrapperID(t)
+	if w == dead {
+		t.Fatal("dead wrapper reused")
+	}
+	if v, _ := s.local.Run("display", "-p", "-t", w, "#{pane_dead}"); v != "0" {
+		t.Errorf("pane_dead = %q", v)
+	}
+	if got, _ := s.local.ClientSession(s.client); got != w {
+		t.Errorf("client on %q, want %q", got, w)
+	}
 }
 
 func TestWrapperClosesWhenRemoteKilled(t *testing.T) {

@@ -76,14 +76,8 @@ func (f *Fleet) wrapper(name, id string, created int64) (w string, fallback bool
 	f.wmu.Lock()
 	defer f.wmu.Unlock()
 	tag := Entry{Host: name, ID: id, Created: created}.Key()
-	tags, err := f.local.SessionTags(remoteOption)
-	if err != nil {
-		return "", false, err
-	}
-	for w, v := range tags {
-		if v == tag {
-			return w, false, nil
-		}
+	if w, err := f.liveWrapper(tag); err != nil || w != "" {
+		return w, false, err
 	}
 	remote := f.remote(name)
 	term := f.Term
@@ -99,22 +93,47 @@ func (f *Fleet) wrapper(name, id string, created int64) (w string, fallback bool
 	if err != nil {
 		return "", false, err
 	}
-	w, err = f.local.NewCommandSession(wname, wrapperCommand(remote, term, id))
-	if err != nil {
-		return "", false, err
-	}
+	// The options are set in the same command list as new-session, which
+	// makes them its target, so they apply before ssh can exit.
 	// remain-on-exit off makes the wrapper close when ssh exits even if the
 	// user enables it globally.
+	args := []string{"new-session", "-d", "-P", "-F", "#{session_id}", "-s", wname,
+		wrapperCommand(remote, term, id)}
 	for _, o := range [][2]string{
 		{remoteOption, tag}, {"status", "off"}, {"prefix", "None"}, {"prefix2", "None"},
 		{"detach-on-destroy", "off"}, {"remain-on-exit", "off"},
 	} {
-		if err := f.local.SetSessionOption(w, o[0], o[1]); err != nil {
-			f.local.KillSession(w)
-			return "", false, err
-		}
+		args = append(args, ";", "set-option", o[0], o[1])
+	}
+	w, err = f.local.Run(args...)
+	if err != nil {
+		f.local.KillSession("=" + wname)
+		return "", false, err
 	}
 	return w, fallback, nil
+}
+
+// liveWrapper returns the wrapper tagged tag, or "" if there is none. A
+// wrapper whose pane is dead (ssh exited under remain-on-exit) is killed and
+// treated as absent.
+func (f *Fleet) liveWrapper(tag string) (string, error) {
+	out, err := f.local.Run("list-sessions", "-F", "#{session_id} #{pane_dead} #{"+remoteOption+"}")
+	if err != nil {
+		return "", err
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		p := strings.SplitN(line, " ", 3)
+		if len(p) != 3 || p[2] != tag {
+			continue
+		}
+		if p[1] != "1" {
+			return p[0], nil
+		}
+		if err := f.local.KillSession(p[0]); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
 }
 
 // wrapperName returns the first unused _ssmux_<n> session name.
@@ -170,14 +189,18 @@ func (f *Fleet) touch(name, id string, s tmux.Session) error {
 	return nil
 }
 
-// gen returns the host's switch generation, 0 if it is not configured.
-func (f *Fleet) gen(name string) int {
+// startRefresh numbers a new refresh of the host and returns its sequence
+// number and the host's switch generation; ok is false if the host is not
+// configured.
+func (f *Fleet) startRefresh(name string) (seq, gen int, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if h := f.host(name); h != nil {
-		return h.gen
+	h := f.host(name)
+	if h == nil {
+		return 0, 0, false
 	}
-	return 0
+	h.started++
+	return h.started, h.gen, true
 }
 
 // withSwitched returns ss plus the sessions switched to after gen, which a
