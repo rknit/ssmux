@@ -170,6 +170,9 @@ func (f *fakeTmux) RenameSession(id, name string) error {
 
 func (f *fakeTmux) KillSession(id string) error {
 	f.record("KillSession %s", id)
+	if err := f.errs["KillSession"]; err != nil {
+		return err
+	}
 	i := f.find(id)
 	f.sessions = append(f.sessions[:i], f.sessions[i+1:]...)
 	return nil
@@ -177,6 +180,9 @@ func (f *fakeTmux) KillSession(id string) error {
 
 func (f *fakeTmux) SwitchClient(client, id string) error {
 	f.record("SwitchClient %s %s", client, id)
+	if err := f.errs["SwitchClient"]; err != nil {
+		return err
+	}
 	f.current = id
 	return nil
 }

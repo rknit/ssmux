@@ -439,7 +439,9 @@ func TestKillCurrentRemoteSwitchesAway(t *testing.T) {
 	if id := m.Selected().Session.ID; id != "box/$3" {
 		t.Fatalf("selected %q", id)
 	}
-	press(t, m, "x", "y")
+	f.calls = nil
+	m, cmd := press(t, m, "x", "y")
+	settle(t, f, m, cmd)
 	want := []string{"SwitchClient c $1", "KillSession box/$3"}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Errorf("calls = %v, want %v", f.calls, want)

@@ -116,7 +116,9 @@ func TestNewEnterCreatesRemote(t *testing.T) {
 	f := hostsFake()
 	m := cursorOn(t, New(f, "c"), "box/$1")
 	m, _ = press(t, m, "n", "x")
-	_, cmd := press(t, m, "enter")
+	f.calls = nil
+	m, cmd := press(t, m, "enter")
+	_, cmd = settle(t, f, m, cmd)
 	want := []string{"NewSession box x", "SwitchClient c box/$10"}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Errorf("calls = %v, want %v", f.calls, want)
@@ -189,7 +191,9 @@ func TestNewErrorStaysOpen(t *testing.T) {
 	f := hostsFake()
 	f.errs["NewSession"] = errFake("duplicate session: x")
 	m, _ := press(t, sized(New(f, "c"), 100, 30), "n", "x")
-	m, cmd := press(t, m, "enter")
+	f.calls = nil
+	m, cmd := press(t, m, "enter") // on box: runs as a command
+	m, cmd = settle(t, f, m, cmd)
 	if isQuit(cmd) || len(m.dialogs) != 1 || newDialog(t, m).name.Value() != "x" {
 		t.Fatalf("dialogs = %d quit = %v", len(m.dialogs), isQuit(cmd))
 	}

@@ -69,7 +69,19 @@ func (d *newSessionDialog) update(m *Model, k tea.KeyPressMsg) tea.Cmd {
 
 // create makes the session on the chosen host and switches to it. If the
 // switch fails the session exists, so the dialog closes and the list shows it.
+// On a remote host both run as a command reporting a createMsg.
 func (d *newSessionDialog) create(m *Model) tea.Cmd {
+	if d.host != "" {
+		t, client, host, name := m.t, m.client, d.host, d.name.Value()
+		m.pending = true
+		return func() tea.Msg {
+			id, err := t.NewSession(host, name)
+			if err != nil {
+				return createMsg{newErr: err}
+			}
+			return createMsg{switchErr: t.SwitchClient(client, id)}
+		}
+	}
 	id, err := m.t.NewSession(d.host, d.name.Value())
 	if err != nil {
 		d.err = err.Error()
@@ -92,7 +104,10 @@ var (
 func (d *newSessionDialog) view(m Model) string {
 	w, h := m.size()
 	lines := []string{"name  " + d.name.View()}
-	if d.err != "" {
+	switch {
+	case m.pending:
+		lines = append(lines, dimStyle.Render("working…"))
+	case d.err != "":
 		lines = append(lines, errStyle.Render(d.err))
 	}
 	// Size for both hint lines so the box doesn't jump when focus moves.

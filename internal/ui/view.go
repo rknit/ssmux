@@ -58,11 +58,17 @@ func (m Model) promptLine() (string, bool) {
 	case modeFilter:
 		s = " search: " + m.input.View()
 	}
-	if m.err != "" {
+	add := func(t string) {
 		if s != "" {
 			s += "  "
 		}
-		s += errStyle.Render(m.err)
+		s += t
+	}
+	if m.pending && len(m.dialogs) == 0 {
+		add(dimStyle.Render("working…"))
+	}
+	if m.err != "" {
+		add(errStyle.Render(m.err))
 	}
 	return s, s != ""
 }

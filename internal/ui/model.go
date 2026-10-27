@@ -21,9 +21,9 @@ const (
 
 // Tmux is the subset of fleet.Fleet the picker uses. RefreshHost and
 // CapturePane touch the network and the picker runs them as commands.
-// SwitchClient, NewSession, RenameSession and KillSession also run ssh
-// synchronously when given a remote host or ID, bounded by the remote
-// client's timeout.
+// SwitchClient, NewSession, RenameSession and KillSession run ssh when given
+// a remote host or ID; the picker then runs them as commands too (see
+// startAction) and calls them synchronously only for local targets.
 type Tmux interface {
 	Hosts() []fleet.HostStatus
 	RefreshHost(host string)
@@ -77,6 +77,38 @@ func refreshHost(t Tmux, host string, gen int, delay time.Duration) tea.Cmd {
 	})
 }
 
+// doneMsg reports a remote action started by startAction.
+type doneMsg struct {
+	act    action
+	err    error
+	reload bool // reload the list even though err is set
+}
+
+type action int
+
+const (
+	actSwitch action = iota
+	actRename
+	actKill
+)
+
+// createMsg reports a remote create started by the New session dialog.
+// newErr is set when the session wasn't created, switchErr when it was but
+// the switch failed.
+type createMsg struct {
+	newErr, switchErr error
+}
+
+// remote reports whether any of ids lives on a remote host.
+func remote(ids ...string) bool {
+	for _, id := range ids {
+		if h, _ := fleet.Split(id); h != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type Model struct {
 	t      Tmux
 	client string
@@ -103,6 +135,9 @@ type Model struct {
 	width, height int
 	lastList      time.Time
 	capturing     bool // a capture command is in flight
+	// pending is set while a remote action runs as a command. Action keys
+	// are ignored until its result arrives.
+	pending bool
 }
 
 // New loads the session list for client and puts the cursor on the first
@@ -225,7 +260,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.preview = msg.text
 		return m, nil
+	case doneMsg:
+		return m.finishAction(msg)
+	case createMsg:
+		return m.finishCreate(msg)
 	case tea.KeyPressMsg:
+		if m.pending {
+			return m.updatePending(msg)
+		}
 		m.err = ""
 		if len(m.dialogs) > 0 {
 			return m.updateDialog(msg)
@@ -287,6 +329,79 @@ func (m Model) host(name string) (fleet.HostStatus, bool) {
 	return fleet.HostStatus{}, false
 }
 
+// startAction runs fn as a command for a remote action and marks the model
+// pending until its doneMsg arrives.
+func (m *Model) startAction(act action, fn func() error) tea.Cmd {
+	m.pending = true
+	return func() tea.Msg { return doneMsg{act: act, err: fn()} }
+}
+
+// finishAction applies the result of a remote action.
+func (m Model) finishAction(msg doneMsg) (tea.Model, tea.Cmd) {
+	m.pending = false
+	if msg.err != nil {
+		m.err = msg.err.Error()
+		if msg.reload {
+			m.reload()
+		}
+		return m, nil
+	}
+	switch msg.act {
+	case actSwitch:
+		return m, tea.Quit
+	case actRename:
+		m.endInput()
+	}
+	m.reload()
+	return m, nil
+}
+
+// finishCreate applies the result of a remote create from the New session
+// dialog, which is still on top.
+func (m Model) finishCreate(msg createMsg) (tea.Model, tea.Cmd) {
+	m.pending = false
+	switch {
+	case msg.newErr != nil:
+		if d, ok := m.top().(*newSessionDialog); ok {
+			d.err = msg.newErr.Error()
+		}
+		return m, nil
+	case msg.switchErr != nil:
+		m.pop()
+		m.err = msg.switchErr.Error()
+		m.reload()
+		return m, nil
+	}
+	return m, tea.Quit
+}
+
+// updatePending handles keys while a remote action runs: Esc (and q in the
+// list) closes the popup, arrows move in the list, the rest is ignored.
+func (m Model) updatePending(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	k := msg.String()
+	if k == "esc" {
+		return m, tea.Quit
+	}
+	if len(m.dialogs) > 0 {
+		return m, nil
+	}
+	switch k {
+	case "q":
+		if m.mode == modeNormal {
+			return m, tea.Quit
+		}
+	case "up", "alt+up":
+		if m.mode == modeNormal || m.mode == modeFilter {
+			m.move(-1)
+		}
+	case "down", "alt+down":
+		if m.mode == modeNormal || m.mode == modeFilter {
+			m.move(+1)
+		}
+	}
+	return m, nil
+}
+
 // switchTo moves the client to s and quits, or shows why it can't.
 func (m Model) switchTo(s tmux.Session) (tea.Model, tea.Cmd) {
 	if s.ID == "" {
@@ -295,6 +410,11 @@ func (m Model) switchTo(s tmux.Session) (tea.Model, tea.Cmd) {
 	if s.Status == "unreachable" {
 		m.err = s.Host + " unreachable"
 		return m, nil
+	}
+	if remote(s.ID) {
+		t, client := m.t, m.client
+		cmd := m.startAction(actSwitch, func() error { return t.SwitchClient(client, s.ID) })
+		return m, cmd
 	}
 	if err := m.t.SwitchClient(m.client, s.ID); err != nil {
 		m.err = err.Error()
@@ -419,6 +539,11 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			m.err = "name can't be empty"
 			return m, nil
 		}
+		if remote(m.target) {
+			t, id := m.t, m.target
+			cmd := m.startAction(actRename, func() error { return t.RenameSession(id, value) })
+			return m, cmd
+		}
 		if err := m.t.RenameSession(m.target, value); err != nil {
 			m.err = err.Error()
 			return m, nil
@@ -442,13 +567,28 @@ func (m Model) updateConfirmKill(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = "session no longer exists"
 		return m, nil
 	}
+	// Move the client away first so killing its session doesn't detach it.
+	next := ""
 	if id == m.current {
-		// Move the client away first so killing its session doesn't detach it.
-		if next, ok := m.previousSession(); ok {
-			if err := m.t.SwitchClient(m.client, next); err != nil {
-				m.err = err.Error()
-				return m, nil
+		next, _ = m.previousSession()
+	}
+	if remote(id, next) {
+		t, client := m.t, m.client
+		m.pending = true
+		cmd := func() tea.Msg {
+			if next != "" {
+				if err := t.SwitchClient(client, next); err != nil {
+					return doneMsg{act: actKill, err: err}
+				}
 			}
+			return doneMsg{act: actKill, err: t.KillSession(id), reload: true}
+		}
+		return m, cmd
+	}
+	if next != "" {
+		if err := m.t.SwitchClient(m.client, next); err != nil {
+			m.err = err.Error()
+			return m, nil
 		}
 	}
 	if err := m.t.KillSession(id); err != nil {
