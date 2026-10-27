@@ -1,42 +1,15 @@
 package app
 
 import (
-	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/rknit/ssmux/internal/testutil"
 	"github.com/rknit/ssmux/internal/tmux"
 )
 
-func newServer(t *testing.T) tmux.Client {
-	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not on PATH")
-	}
-	dir, err := os.MkdirTemp("/tmp", "ssmux")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := tmux.Client{Socket: filepath.Join(dir, "sock")}
-	conf := filepath.Join(dir, "tmux.conf")
-	if err := os.WriteFile(conf, []byte("set -g default-shell /bin/sh\nset -g remain-on-exit on\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("tmux", "-S", c.Socket, "-f", conf,
-		"new-session", "-d", "-s", "base").CombinedOutput(); err != nil {
-		t.Fatalf("start tmux: %v: %s", err, out)
-	}
-	t.Cleanup(func() {
-		exec.Command("tmux", "-S", c.Socket, "kill-server").Run()
-		os.RemoveAll(dir)
-	})
-	return c
-}
-
 func TestSwitchEmptySlot(t *testing.T) {
-	c := newServer(t)
+	c := testutil.NewServer(t)
 	if err := Switch(c, "", 7); err != nil {
 		t.Errorf("empty slot: %v", err)
 	}
@@ -53,7 +26,7 @@ func (r *recorder) SwitchClient(client, id string) error {
 }
 
 func TestSwitchFindsSlot(t *testing.T) {
-	r := &recorder{Client: newServer(t)}
+	r := &recorder{Client: testutil.NewServer(t)}
 	id, err := r.NewSession("target", "/tmp")
 	if err != nil {
 		t.Fatal(err)

@@ -4,10 +4,13 @@ package tmux
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const slotOption = "@ssmux-slot"
@@ -16,28 +19,76 @@ type Session struct {
 	ID           string // "$3"
 	Name         string
 	Windows      int
-	LastAttached int64 // unix seconds; 0 if never attached
-	Slot         int   // 0 = unpinned, 1..9
+	LastAttached int64  // unix seconds; 0 if never attached
+	Slot         int    // 0 = unpinned, 1..9
+	Host         string // "" = local
+	Created      int64  // unix seconds
+	Status       string // "", "connecting" or "unreachable"
 }
 
-// Client talks to one tmux server. An empty Socket means the default server.
-type Client struct{ Socket string }
+// Client talks to one tmux server, locally or over ssh when Host is set.
+// An empty Socket means the default server. An empty SSH means "ssh".
+// A zero Timeout means no limit.
+type Client struct {
+	Socket, Host, SSH string
+	Timeout           time.Duration
+}
 
 // Run executes tmux with args and returns trimmed stdout.
 func (c Client) Run(args ...string) (string, error) {
 	name := args[0]
-	if c.Socket != "" {
+	if c.Host == "" && c.Socket != "" {
 		args = append([]string{"-S", c.Socket}, args...)
 	}
+	var argv []string
+	if c.Host == "" {
+		argv = append([]string{"tmux"}, args...)
+	} else {
+		argv = append(c.SSHArgs(false), remoteTmux(args))
+	}
+	out, err := c.run(argv)
+	if err != nil {
+		return "", fmt.Errorf("tmux %s: %w", name, err)
+	}
+	return out, nil
+}
+
+// Exec runs a raw shell command on the host (locally when Host is empty).
+func (c Client) Exec(cmd string) (string, error) {
+	argv := []string{"sh", "-c", cmd}
+	if c.Host != "" {
+		argv = append(c.SSHArgs(false), cmd)
+	}
+	out, err := c.run(argv)
+	if err != nil {
+		return "", fmt.Errorf("exec: %w", err)
+	}
+	return out, nil
+}
+
+// run executes argv and returns trimmed stdout; errors carry stderr.
+func (c Client) run(argv []string) (string, error) {
+	if c.Host != "" {
+		if err := os.MkdirAll(sshDir(), 0o700); err != nil {
+			return "", err
+		}
+	}
+	ctx := context.Background()
+	if c.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
+	}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("tmux %s: %s", name, msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 	return strings.TrimRight(stdout.String(), "\n"), nil
 }
@@ -53,7 +104,7 @@ func (c Client) ListSessions() ([]Session, error) {
 	// name goes last and only the fields before it are split on ":".
 	format := strings.Join([]string{
 		"#{session_id}", "#{session_windows}", "#{session_last_attached}",
-		"#{" + slotOption + "}", "#{session_name}",
+		"#{" + slotOption + "}", "#{session_created}", "#{session_name}",
 	}, ":")
 	out, err := c.Run("list-sessions", "-F", format)
 	if err != nil {
@@ -61,13 +112,14 @@ func (c Client) ListSessions() ([]Session, error) {
 	}
 	var ss []Session
 	for line := range strings.SplitSeq(out, "\n") {
-		f := strings.SplitN(line, ":", 5)
-		if len(f) != 5 {
+		f := strings.SplitN(line, ":", 6)
+		if len(f) != 6 {
 			continue
 		}
-		s := Session{ID: f[0], Name: f[4]}
+		s := Session{ID: f[0], Name: f[5], Host: c.Host}
 		s.Windows, _ = strconv.Atoi(f[1])
 		s.LastAttached, _ = strconv.ParseInt(f[2], 10, 64)
+		s.Created, _ = strconv.ParseInt(f[4], 10, 64)
 		if n, err := strconv.Atoi(f[3]); err == nil && n >= 1 && n <= 9 {
 			s.Slot = n
 		}
@@ -90,7 +142,10 @@ func (c Client) SetSlot(id string, slot int) error {
 // NewSession creates a detached session in dir and returns its ID.
 // An empty name lets tmux pick one.
 func (c Client) NewSession(name, dir string) (string, error) {
-	args := []string{"new-session", "-d", "-P", "-F", "#{session_id}", "-c", dir}
+	args := []string{"new-session", "-d", "-P", "-F", "#{session_id}"}
+	if dir != "" {
+		args = append(args, "-c", dir)
+	}
 	if name != "" {
 		args = append(args, "-s", name)
 	}
@@ -130,4 +185,52 @@ func (c Client) ClientSession(client string) (string, error) {
 // including color escapes.
 func (c Client) CapturePane(id string) (string, error) {
 	return c.Run("capture-pane", "-p", "-e", "-t", id+":")
+}
+
+// SessionTags returns session ID -> value of a user option, for sessions
+// where it is set. Values must not contain spaces.
+func (c Client) SessionTags(option string) (map[string]string, error) {
+	out, err := c.Run("list-sessions", "-F", "#{session_id} #{"+option+"}")
+	if err != nil {
+		return nil, err
+	}
+	tags := map[string]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		if id, v, ok := strings.Cut(line, " "); ok && v != "" {
+			tags[id] = v
+		}
+	}
+	return tags, nil
+}
+
+// GlobalOption returns a global option's value, "" if unset.
+func (c Client) GlobalOption(name string) (string, error) {
+	return c.Run("show-options", "-gqv", name)
+}
+
+// SetGlobalOption sets a global option; an empty value unsets it.
+func (c Client) SetGlobalOption(name, value string) error {
+	var err error
+	if value == "" {
+		_, err = c.Run("set-option", "-gu", name)
+	} else {
+		_, err = c.Run("set-option", "-g", name, value)
+	}
+	return err
+}
+
+func (c Client) SetSessionOption(id, name, value string) error {
+	_, err := c.Run("set-option", "-t", id, name, value)
+	return err
+}
+
+// NewCommandSession creates a detached session running cmd and returns its ID.
+func (c Client) NewCommandSession(name, cmd string) (string, error) {
+	return c.Run("new-session", "-d", "-P", "-F", "#{session_id}", "-s", name, cmd)
+}
+
+// Display shows msg on client's status line.
+func (c Client) Display(client, msg string) error {
+	_, err := c.Run("display-message", "-c", client, msg)
+	return err
 }

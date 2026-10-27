@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"os"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +174,85 @@ func TestNameWithColon(t *testing.T) {
 	c.SetSlot(id, 2)
 	if s := byID(t, c, id); s.Slot != 2 || s.Windows != 1 {
 		t.Errorf("got %+v", s)
+	}
+}
+
+func TestListSessionsCreated(t *testing.T) {
+	c := newTestServer(t)
+	id := mustNew(t, c, "created")
+	if byID(t, c, id).Created <= 0 {
+		t.Error("Created not set")
+	}
+}
+
+func TestSessionTags(t *testing.T) {
+	c := newTestServer(t)
+	id := mustNew(t, c, "tagged")
+	mustNew(t, c, "untagged")
+	if err := c.SetSessionOption(id, "@ssmux-remote", "h,$1,5"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.SessionTags("@ssmux-remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{id: "h,$1,5"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestGlobalOption(t *testing.T) {
+	c := newTestServer(t)
+	if err := c.SetGlobalOption("@x", "a b"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.GlobalOption("@x"); err != nil || got != "a b" {
+		t.Errorf("got %q, %v", got, err)
+	}
+	if err := c.SetGlobalOption("@x", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.GlobalOption("@x"); err != nil || got != "" {
+		t.Errorf("after unset got %q, %v", got, err)
+	}
+}
+
+func TestNewCommandSession(t *testing.T) {
+	c := newTestServer(t)
+	id, err := c.NewCommandSession("cmd", "sleep 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := byID(t, c, id); s.Name != "cmd" {
+		t.Errorf("name = %q", s.Name)
+	}
+}
+
+func TestNewSessionNoDir(t *testing.T) {
+	c := newTestServer(t)
+	id, err := c.NewSession("nodir", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID(t, c, id)
+}
+
+func TestSSHArgs(t *testing.T) {
+	got := Client{Host: "h"}.SSHArgs(true)
+	if got[0] != "ssh" {
+		t.Errorf("got[0] = %q", got[0])
+	}
+	if n := len(got); got[n-2] != "h" || got[n-1] != "--" {
+		t.Errorf("tail = %v", got[n-2:])
+	}
+	joined := " " + strings.Join(got, " ") + " "
+	for _, w := range []string{" -t ", "BatchMode=yes", "ConnectTimeout=3", "ControlPersist=10m",
+		"ControlPath=/tmp/ssmux-" + strconv.Itoa(os.Getuid()) + "/cm-%C"} {
+		if !strings.Contains(joined, w) {
+			t.Errorf("missing %q in %v", w, got)
+		}
+	}
+	if strings.Contains(" "+strings.Join(Client{Host: "h"}.SSHArgs(false), " ")+" ", " -t ") {
+		t.Error("-t present without tty")
 	}
 }
