@@ -39,13 +39,13 @@ func parseConfig(sshDir, file string, depth int, set map[string]bool) {
 		key, val := splitDirective(sc.Text())
 		switch strings.ToLower(key) {
 		case "host":
-			for _, p := range strings.Fields(val) {
-				if !strings.ContainsAny(p, "*?!") {
+			for _, p := range tokenize(val) {
+				if !strings.ContainsAny(p, "*?!") && !strings.ContainsAny(p, " \t") {
 					set[p] = true
 				}
 			}
 		case "include":
-			for _, p := range strings.Fields(val) {
+			for _, p := range tokenize(val) {
 				for _, m := range globInclude(sshDir, p) {
 					parseConfig(sshDir, m, depth+1, set)
 				}
@@ -80,4 +80,47 @@ func globInclude(sshDir, pat string) []string {
 	}
 	m, _ := filepath.Glob(pat)
 	return m
+}
+
+// tokenize splits val on whitespace, honoring double quotes and stopping at
+// an unquoted token that starts with '#'.
+func tokenize(val string) []string {
+	var out []string
+	var cur strings.Builder
+	inTok, quoted, startQuote := false, false, false
+	flush := func() bool {
+		if !inTok {
+			return true
+		}
+		t := cur.String()
+		cur.Reset()
+		inTok = false
+		if !startQuote && strings.HasPrefix(t, "#") {
+			return false
+		}
+		out = append(out, t)
+		return true
+	}
+	for _, r := range val {
+		switch {
+		case r == '"':
+			if !inTok {
+				startQuote = true
+			}
+			inTok = true
+			quoted = !quoted
+		case (r == ' ' || r == '\t') && !quoted:
+			if !flush() {
+				return out
+			}
+		default:
+			if !inTok {
+				startQuote = false
+			}
+			inTok = true
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return out
 }
