@@ -312,3 +312,12 @@ func TestDialogFitsSmallScreen(t *testing.T) {
 		t.Errorf("%d lines > 6", n)
 	}
 }
+
+func TestNewLongNameScrolls(t *testing.T) {
+	m, _ := press(t, sized(New(newFake(), "c"), 60, 20), "n")
+	m = typeText(t, m, strings.Repeat("a", 90)+"tail")
+	top := strings.Join(topBox(t, m, "New session"), "\n")
+	if !strings.Contains(top, "tail") {
+		t.Errorf("end of the name not visible:\n%s", top)
+	}
+}

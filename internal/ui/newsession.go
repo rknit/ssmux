@@ -27,6 +27,7 @@ func (m *Model) openNewSession() tea.Cmd {
 		d.host = s.Host
 	}
 	m.push(d)
+	d.fitName(*m)
 	return d.name.Focus()
 }
 
@@ -62,6 +63,7 @@ func (d *newSessionDialog) update(m *Model, k tea.KeyPressMsg) tea.Cmd {
 	if k.String() == "enter" {
 		return d.create(m)
 	}
+	d.fitName(*m)
 	var cmd tea.Cmd
 	d.name, cmd = d.name.Update(k)
 	return cmd
@@ -101,18 +103,40 @@ var (
 	newHostHints = hintKeys("⏎", "choose", "r", "local", "Tab", "name") + "  " + keyStyle.Render("Esc")
 )
 
-func (d *newSessionDialog) view(m Model) string {
-	w, h := m.size()
-	lines := []string{"name  " + d.name.View()}
+const namePrefix = "name  "
+
+// status is the line under the fields: progress or the last error.
+func (d *newSessionDialog) status(m Model) []string {
 	switch {
 	case m.pending:
-		lines = append(lines, dimStyle.Render("working…"))
+		return []string{dimStyle.Render("working…")}
 	case d.err != "":
-		lines = append(lines, errStyle.Render(d.err))
+		return []string{errStyle.Render(d.err)}
 	}
+	return nil
+}
+
+// inner is the box's inner width. It doesn't depend on the name, which
+// scrolls inside it.
+func (d *newSessionDialog) inner(m Model) int {
+	w, _ := m.size()
+	lines := d.status(m)
 	// Size for both hint lines so the box doesn't jump when focus moves.
 	inner := boxInner("New session", lines, newHostHints, 33, w)
-	inner = boxInner("New session", lines, newNameHints, inner, w)
+	return boxInner("New session", lines, newNameHints, inner, w)
+}
+
+// fitName sizes the name input to the box, leaving a cell for the cursor
+// at the end, so long names scroll instead of being cut off.
+func (d *newSessionDialog) fitName(m Model) {
+	d.name.SetWidth(max(d.inner(m)-len(namePrefix)-1, 1))
+}
+
+func (d *newSessionDialog) view(m Model) string {
+	w, h := m.size()
+	d.fitName(m) // the screen or the status line may have changed
+	lines := append([]string{namePrefix + d.name.View()}, d.status(m)...)
+	inner := d.inner(m)
 	host := hostLabel(d.host)
 	hints := newNameHints
 	if d.focus == focusHost {
