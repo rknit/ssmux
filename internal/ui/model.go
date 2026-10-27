@@ -41,7 +41,6 @@ type mode int
 const (
 	modeNormal mode = iota
 	modePin
-	modeNew
 	modeRename
 	modeConfirmKill
 	modeFilter
@@ -82,7 +81,8 @@ type Model struct {
 	filter   string
 
 	mode    mode
-	target  string // session ID chosen when kill or rename started
+	dialogs []dialog // open dialogs, top last; they take all keys
+	target  string   // session ID chosen when kill or rename started
 	input   textinput.Model
 	err     string
 	preview string
@@ -211,12 +211,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		m.err = ""
+		if len(m.dialogs) > 0 {
+			return m.updateDialog(msg)
+		}
 		switch m.mode {
 		case modePin:
 			return m.updatePin(msg)
 		case modeConfirmKill:
 			return m.updateConfirmKill(msg)
-		case modeNew, modeRename, modeFilter:
+		case modeRename, modeFilter:
 			return m.updateInput(msg)
 		default:
 			return m.updateNormal(msg)
@@ -296,7 +299,7 @@ func (m Model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode, m.target = modeConfirmKill, sel.Session.ID
 		}
 	case "n":
-		cmd := m.startInput(modeNew, "")
+		cmd := m.openNewSession()
 		return m, cmd
 	case "r":
 		if sel.Session.ID != "" {
@@ -377,19 +380,6 @@ func (m Model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	value := m.input.Value()
 	switch m.mode {
-	case modeNew:
-		id, err := m.t.NewSession("", value)
-		if err != nil {
-			m.err = err.Error()
-			return m, nil
-		}
-		if err := m.t.SwitchClient(m.client, id); err != nil {
-			m.err = err.Error()
-			m.endInput()
-			m.reload()
-			return m, nil
-		}
-		return m, tea.Quit
 	case modeRename:
 		if !m.exists(m.target) {
 			m.err = "session no longer exists"

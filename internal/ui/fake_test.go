@@ -136,8 +136,11 @@ func (f *fakeTmux) NewSession(host, name string) (string, error) {
 		return "", err
 	}
 	id := fmt.Sprintf("$%d", f.nextID)
+	if host != "" {
+		id = host + "/" + id
+	}
 	f.nextID++
-	f.sessions = append(f.sessions, tmux.Session{ID: id, Name: name})
+	f.sessions = append(f.sessions, tmux.Session{ID: id, Name: name, Host: host})
 	return id, nil
 }
 
@@ -196,6 +199,10 @@ func key(s string) tea.KeyPressMsg {
 		k.Code = tea.KeyEscape
 	case "backspace":
 		k.Code = tea.KeyBackspace
+	case "tab":
+		k.Code = tea.KeyTab
+	case "space":
+		k.Code, k.Text = tea.KeySpace, " "
 	default:
 		r := []rune(name)[0]
 		k.Code, k.Text = r, name

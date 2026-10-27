@@ -149,8 +149,8 @@ func TestNewSessionEscCancels(t *testing.T) {
 	m, _ := press(t, New(f, "c"), "n")
 	m = typeText(t, m, "x")
 	m, _ = press(t, m, "esc")
-	if len(f.calls) != 0 || m.mode != modeNormal {
-		t.Errorf("calls = %v mode = %v", f.calls, m.mode)
+	if len(f.calls) != 0 || len(m.dialogs) != 0 {
+		t.Errorf("calls = %v dialogs = %d", f.calls, len(m.dialogs))
 	}
 }
 
@@ -160,8 +160,9 @@ func TestNewDuplicateShowsError(t *testing.T) {
 	m, _ := press(t, New(f, "c"), "n")
 	m = typeText(t, m, "proj")
 	m, cmd := press(t, m, "enter")
-	if isQuit(cmd) || m.mode != modeNew || m.input.Value() != "proj" {
-		t.Errorf("mode = %v input = %q", m.mode, m.input.Value())
+	d, ok := m.top().(*newSessionDialog)
+	if isQuit(cmd) || !ok || d.name.Value() != "proj" {
+		t.Fatalf("dialogs = %d top = %#v", len(m.dialogs), m.top())
 	}
 	if !strings.Contains(m.render(), "duplicate session: proj") {
 		t.Errorf("error not rendered:\n%s", m.render())

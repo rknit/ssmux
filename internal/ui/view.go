@@ -38,7 +38,7 @@ func (m Model) footer() []string {
 		return []string{keys("1-9", "slot", "⏎", "first free", "0", "unpin", "Esc", "cancel")}
 	case modeConfirmKill:
 		return []string{fmt.Sprintf(" kill %q?  ", m.Selected().Session.Name) + keys("y", "yes", "n", "no")}
-	case modeNew, modeRename:
+	case modeRename:
 		return []string{keys("⏎", "confirm", "Esc", "cancel")}
 	case modeFilter:
 		return []string{keys("↑↓", "move", "⏎", "switch", "Esc", "clear")}
@@ -53,8 +53,6 @@ func (m Model) footer() []string {
 func (m Model) promptLine() (string, bool) {
 	var s string
 	switch m.mode {
-	case modeNew:
-		s = " new session: " + m.input.View()
 	case modeRename:
 		s = " rename: " + m.input.View()
 	case modeFilter:
@@ -110,11 +108,25 @@ func (m Model) previewLines(h int) []string {
 	return lines
 }
 
-func (m Model) render() string {
-	w, h := m.width, m.height
-	if w <= 0 || h <= 0 {
-		w, h = 80, 24
+// size is the screen size, or 80x24 before the first WindowSizeMsg.
+func (m Model) size() (int, int) {
+	if m.width <= 0 || m.height <= 0 {
+		return 80, 24
 	}
+	return m.width, m.height
+}
+
+// render draws the list and preview, and the dialogs over them.
+func (m Model) render() string {
+	w, h := m.size()
+	base := m.renderBase(w, h)
+	if len(m.dialogs) == 0 {
+		return base
+	}
+	return m.compose(base, w, h)
+}
+
+func (m Model) renderBase(w, h int) string {
 	footer := m.footer()
 	prompt, hasPrompt := m.promptLine()
 	bodyH := h - len(footer)
