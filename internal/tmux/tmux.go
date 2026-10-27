@@ -169,11 +169,17 @@ func (c Client) ListSessions() ([]Session, error) {
 	return ss, nil
 }
 
-// noServer reports whether err is tmux failing to reach its server.
+// noServer reports whether err is tmux finding no server to talk to: none
+// running, a missing socket or a stale one. Other socket errors, such as
+// permission denied, are real failures.
 func noServer(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "no server running on") ||
-		strings.Contains(msg, "error connecting to")
+	if strings.Contains(msg, "no server running on") {
+		return true
+	}
+	return strings.Contains(msg, "error connecting to") &&
+		(strings.Contains(msg, "(No such file or directory)") ||
+			strings.Contains(msg, "(Connection refused)"))
 }
 
 // SetSlot stores slot on the session; slot 0 removes it.

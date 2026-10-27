@@ -124,3 +124,28 @@ func TestRemoteMasterCheckHangs(t *testing.T) {
 		t.Errorf("took %v", d)
 	}
 }
+
+// A host whose tmux socket can't be opened is an error; only a missing or
+// dead server means no sessions.
+func TestRemoteListSessionsSocketErrors(t *testing.T) {
+	for _, tc := range []struct {
+		stderr  string
+		wantErr bool
+	}{
+		{"error connecting to /tmp/tmux-1000/default (No such file or directory)", false},
+		{"error connecting to /tmp/tmux-1000/default (Permission denied)", true},
+	} {
+		ssh := filepath.Join(t.TempDir(), "ssh")
+		script := "#!/bin/sh\necho '" + tc.stderr + "' >&2\nexit 1\n"
+		if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ss, err := tmux.Client{Host: "h", SSH: ssh}.ListSessions()
+		if (err != nil) != tc.wantErr || len(ss) != 0 {
+			t.Errorf("%s: sessions = %v, err = %v", tc.stderr, ss, err)
+		}
+		if tc.wantErr && err != nil && !strings.Contains(err.Error(), "Permission denied") {
+			t.Errorf("err = %v, want the tmux message", err)
+		}
+	}
+}
