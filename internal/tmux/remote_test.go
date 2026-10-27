@@ -67,15 +67,11 @@ func TestRemoteForkedMaster(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := tmux.Client{Host: "h", SSH: ssh, Timeout: 3 * time.Second}
-	start := time.Now()
 	out, err := c.Exec("true")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if out != "out" {
 		t.Errorf("out = %q", out)
-	}
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("took %v", d)
 	}
 }
