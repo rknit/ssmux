@@ -37,6 +37,8 @@ type host struct {
 	HostStatus
 	sessions []tmux.Session    // last listing; nil unless Connected
 	names    map[string]string // id -> last known name
+	gen      int               // bumped by each switch to one of its sessions
+	switched map[string]switched
 }
 
 // Fleet merges the local tmux server with every configured ssh host and
@@ -47,6 +49,10 @@ type Fleet struct {
 	sshDir    string
 	remote    func(host string) tmux.Client
 
+	// Term is the local TERM that wrappers pass to ssh.
+	Term string
+
+	wmu   sync.Mutex // serializes wrapper lookup and creation
 	mu    sync.Mutex
 	hosts []*host
 }
@@ -54,7 +60,7 @@ type Fleet struct {
 // New loads the hosts file; every host starts out Connecting. remote builds
 // the client for a host, and its Timeout bounds every remote call.
 func New(local tmux.Client, hostsPath, sshDir string, remote func(host string) tmux.Client) *Fleet {
-	f := &Fleet{local: local, hostsPath: hostsPath, sshDir: sshDir, remote: remote}
+	f := &Fleet{local: local, hostsPath: hostsPath, sshDir: sshDir, remote: remote, Term: os.Getenv("TERM")}
 	names, _ := hosts.Load(hostsPath)
 	for _, n := range names {
 		f.hosts = append(f.hosts, newHost(n))
@@ -63,7 +69,7 @@ func New(local tmux.Client, hostsPath, sshDir string, remote func(host string) t
 }
 
 func newHost(name string) *host {
-	return &host{HostStatus: HostStatus{Name: name}, names: map[string]string{}}
+	return &host{HostStatus: HostStatus{Name: name}, names: map[string]string{}, switched: map[string]switched{}}
 }
 
 // host returns the cached host named name, or nil. Callers hold mu.
@@ -90,6 +96,7 @@ func (f *Fleet) Hosts() []HostStatus {
 // RefreshHost lists the host's sessions over ssh and caches the result.
 // It blocks for up to the remote client's Timeout.
 func (f *Fleet) RefreshHost(name string) {
+	gen := f.gen(name)
 	ss, err := f.remote(name).ListSessions()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -101,6 +108,7 @@ func (f *Fleet) RefreshHost(name string) {
 		h.State, h.Err, h.sessions = Unreachable, err.Error(), nil
 		return
 	}
+	ss = h.withSwitched(ss, gen)
 	h.State, h.Err, h.sessions = Connected, "", ss
 	for _, s := range ss {
 		h.names[s.ID] = s.Name
@@ -339,6 +347,7 @@ func (f *Fleet) KillSession(qid string) error {
 	defer f.mu.Unlock()
 	if h := f.host(name); h != nil {
 		h.sessions = slices.DeleteFunc(h.sessions, func(s tmux.Session) bool { return s.ID == id })
+		delete(h.switched, id)
 	}
 	return f.dropEntries(func(e Entry) bool { return e.Host != name || e.ID != id })
 }
@@ -359,9 +368,26 @@ func (f *Fleet) CapturePane(qid string) (string, error) {
 	return c.CapturePane(id)
 }
 
-// ClientSession returns the ID of the local session client is showing.
+// ClientSession returns the ID of the session client is showing: the remote
+// session's qualified ID when it is in a wrapper.
 func (f *Fleet) ClientSession(client string) (string, error) {
-	return f.local.ClientSession(client)
+	id, err := f.local.ClientSession(client)
+	if err != nil {
+		return "", err
+	}
+	tags, err := f.local.SessionTags(remoteOption)
+	if err != nil {
+		return "", err
+	}
+	if e, ok := parseTag(tags[id]); ok {
+		return Qualify(e.Host, e.ID), nil
+	}
+	return id, nil
+}
+
+// Display shows msg on client's status line.
+func (f *Fleet) Display(client, msg string) error {
+	return f.local.Display(client, msg)
 }
 
 // AddHost appends dest to the hosts file and starts tracking it.
@@ -386,11 +412,14 @@ func (f *Fleet) Suggestions() []string {
 	return hosts.Suggestions(f.sshDir, names)
 }
 
-// RemoveHost drops the host from the hosts file and its entries from the
-// local options.
+// RemoveHost kills the host's wrappers and drops the host from the hosts
+// file and its entries from the local options.
 func (f *Fleet) RemoveHost(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.killWrappers(name); err != nil {
+		return err
+	}
 	if err := hosts.Remove(f.hostsPath, name); err != nil {
 		return err
 	}

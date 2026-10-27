@@ -33,7 +33,7 @@ func (c Client) SSHArgs(tty bool) []string {
 func remoteTmux(args []string) string {
 	q := make([]string, len(args))
 	for i, a := range args {
-		q[i] = shellQuote(a)
+		q[i] = ShellQuote(a)
 	}
 	return "tmux " + strings.Join(q, " ")
 }

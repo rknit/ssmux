@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// shellQuote wraps s in single quotes for /bin/sh.
-func shellQuote(s string) string {
+// ShellQuote wraps s in single quotes for /bin/sh.
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
@@ -14,7 +14,7 @@ func shellQuote(s string) string {
 // an existing binding for the same key, so calling it again is harmless and
 // refreshes the binary path.
 func (c Client) BindKeys(exe string) error {
-	bin := shellQuote(exe)
+	bin := ShellQuote(exe)
 	open := bin + " open --client '#{client_name}'"
 	for _, key := range []string{"M-a", "M-Up"} {
 		if _, err := c.Run("bind-key", "-n", key, "run-shell", "-b", open); err != nil {
@@ -36,7 +36,7 @@ func (c Client) OpenPopup(client, exe string) error {
 	if client != "" {
 		args = append(args, "-c", client)
 	}
-	cmd := shellQuote(exe) + " popup --client " + shellQuote(client)
+	cmd := ShellQuote(exe) + " popup --client " + ShellQuote(client)
 	_, err := c.Run(append(args, cmd)...)
 	return err
 }
