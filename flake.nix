@@ -9,7 +9,7 @@
     packages = builtins.mapAttrs (system: pkgs: {
       ssmux = (pkgs.buildGoModule.override { go = pkgs.go_1_27; }) {
         pname = "ssmux";
-        version = "0.1.0";
+        version = "1.0.0";
         src = ./.;
         vendorHash = "sha256-ehI0eDXfeywbxf7nwji1jPVDVaiFU34SF+DhqCA2cGQ=";
         nativeCheckInputs = [ pkgs.tmux ];
