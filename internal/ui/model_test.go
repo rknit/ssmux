@@ -2,7 +2,6 @@ package ui
 
 import (
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -129,21 +128,12 @@ func TestQuitKeys(t *testing.T) {
 	}
 }
 
-func homeDir(t *testing.T) string {
-	t.Helper()
-	h, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return h
-}
-
 func TestNewSession(t *testing.T) {
 	f := newFake()
 	m, _ := press(t, New(f, "c"), "n")
 	m = typeText(t, m, "proj")
 	_, cmd := press(t, m, "enter")
-	want := []string{"NewSession proj " + homeDir(t), "SwitchClient c $10"}
+	want := []string{"NewSession  proj", "SwitchClient c $10"}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Errorf("calls = %v, want %v", f.calls, want)
 	}

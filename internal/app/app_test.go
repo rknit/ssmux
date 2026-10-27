@@ -1,49 +1,79 @@
 package app
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
-	"github.com/rknit/ssmux/internal/testutil"
 	"github.com/rknit/ssmux/internal/tmux"
 )
 
-func TestSwitchEmptySlot(t *testing.T) {
-	c := testutil.NewServer(t)
-	if err := Switch(c, "", 7); err != nil {
-		t.Errorf("empty slot: %v", err)
-	}
+type fakeSwitcher struct {
+	sessions   []tmux.Session
+	resolveErr error
+	calls      []string
 }
 
-type recorder struct {
-	tmux.Client
-	switched []string
+func (f *fakeSwitcher) ListSessions() ([]tmux.Session, error) { return f.sessions, nil }
+
+func (f *fakeSwitcher) Resolve(qid string) (tmux.Session, error) {
+	f.calls = append(f.calls, "Resolve "+qid)
+	return tmux.Session{ID: qid}, f.resolveErr
 }
 
-func (r *recorder) SwitchClient(client, id string) error {
-	r.switched = append(r.switched, client+" "+id)
+func (f *fakeSwitcher) SwitchClient(client, qid string) error {
+	f.calls = append(f.calls, "SwitchClient "+client+" "+qid)
 	return nil
 }
 
+func (f *fakeSwitcher) Display(client, msg string) error {
+	f.calls = append(f.calls, "Display "+client+" "+msg)
+	return nil
+}
+
+func TestSwitchEmptySlot(t *testing.T) {
+	f := &fakeSwitcher{sessions: []tmux.Session{{ID: "$1", Slot: 2}}}
+	if err := Switch(f, "c", 7); err != nil {
+		t.Errorf("empty slot: %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("empty slot made calls: %v", f.calls)
+	}
+}
+
 func TestSwitchFindsSlot(t *testing.T) {
-	r := &recorder{Client: testutil.NewServer(t)}
-	id, err := r.NewSession("target", "/tmp")
-	if err != nil {
+	f := &fakeSwitcher{sessions: []tmux.Session{{ID: "$1"}, {ID: "$2", Slot: 3}}}
+	if err := Switch(f, "c", 3); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SetSlot(id, 3); err != nil {
+	if want := []string{"SwitchClient c $2"}; !reflect.DeepEqual(f.calls, want) {
+		t.Errorf("calls = %v, want %v", f.calls, want)
+	}
+}
+
+func TestSwitchRemotePin(t *testing.T) {
+	f := &fakeSwitcher{sessions: []tmux.Session{{ID: "box/$3", Slot: 4, Status: "connecting"}}}
+	if err := Switch(f, "c", 4); err != nil {
 		t.Fatal(err)
 	}
-	if err := Switch(r, "c", 3); err != nil {
+	want := []string{"Resolve box/$3", "SwitchClient c box/$3"}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Errorf("calls = %v, want %v", f.calls, want)
+	}
+}
+
+func TestSwitchUnreachableDisplays(t *testing.T) {
+	msg := "ssh: connect to host box port 22: Operation timed out"
+	f := &fakeSwitcher{
+		sessions:   []tmux.Session{{ID: "box/$3", Slot: 4}},
+		resolveErr: errors.New(msg),
+	}
+	if err := Switch(f, "c", 4); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"c " + id}; !reflect.DeepEqual(r.switched, want) {
-		t.Errorf("switched = %v, want %v", r.switched, want)
-	}
-	r.switched = nil
-	Switch(r, "c", 4)
-	if len(r.switched) != 0 {
-		t.Errorf("empty slot switched: %v", r.switched)
+	want := []string{"Resolve box/$3", "Display c ssmux: " + msg}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Errorf("calls = %v, want %v", f.calls, want)
 	}
 }
 

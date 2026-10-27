@@ -63,8 +63,8 @@ func (f *fakeTmux) SetSlot(id string, slot int) error {
 	return nil
 }
 
-func (f *fakeTmux) NewSession(name, dir string) (string, error) {
-	f.record("NewSession %s %s", name, dir)
+func (f *fakeTmux) NewSession(host, name string) (string, error) {
+	f.record("NewSession %s %s", host, name)
 	if err := f.errs["NewSession"]; err != nil {
 		return "", err
 	}

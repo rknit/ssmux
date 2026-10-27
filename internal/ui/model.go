@@ -2,7 +2,6 @@
 package ui
 
 import (
-	"os"
 	"strings"
 	"time"
 
@@ -22,7 +21,7 @@ const (
 type Tmux interface {
 	ListSessions() ([]tmux.Session, error)
 	SetSlot(id string, slot int) error
-	NewSession(name, dir string) (string, error)
+	NewSession(host, name string) (string, error)
 	RenameSession(id, name string) error
 	KillSession(id string) error
 	SwitchClient(client, id string) error
@@ -50,7 +49,6 @@ func tick() tea.Cmd {
 type Model struct {
 	t      Tmux
 	client string
-	home   string
 
 	sessions []tmux.Session
 	current  string
@@ -71,8 +69,7 @@ type Model struct {
 // New loads the session list for client and puts the cursor on the first
 // RECENT row (the previous session), so Enter jumps back.
 func New(t Tmux, client string) Model {
-	home, _ := os.UserHomeDir()
-	m := Model{t: t, client: client, home: home, input: textinput.New()}
+	m := Model{t: t, client: client, input: textinput.New()}
 	m.reload()
 	m.cursor = FirstSelectable(m.rows)
 	return m
@@ -294,7 +291,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	value := m.input.Value()
 	switch m.mode {
 	case modeNew:
-		id, err := m.t.NewSession(value, m.home)
+		id, err := m.t.NewSession("", value)
 		if err != nil {
 			m.err = err.Error()
 			return m, nil

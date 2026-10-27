@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
+	"github.com/rknit/ssmux/internal/fleet"
+	"github.com/rknit/ssmux/internal/hosts"
 	"github.com/rknit/ssmux/internal/tmux"
 )
 
@@ -19,23 +22,33 @@ const usage = `usage:
   ssmux switch N [--client C]   switch client C to the session pinned on slot N`
 
 // RunPopup runs the picker UI. It is set by main to avoid an import cycle in tests.
-var RunPopup func(c tmux.Client, client string) error
+var RunPopup func(f *fleet.Fleet, client string) error
 
-type switcher interface {
+type slotSwitcher interface {
 	ListSessions() ([]tmux.Session, error)
-	SwitchClient(client, id string) error
+	Resolve(qid string) (tmux.Session, error)
+	SwitchClient(client, qid string) error
+	Display(client, msg string) error
 }
 
 // Switch moves client to the session on slot. An empty slot is a silent no-op.
-func Switch(c switcher, client string, slot int) error {
-	ss, err := c.ListSessions()
+// A remote pin is resolved over ssh first; if its host is unreachable or the
+// session is gone, the reason is shown on the client and Switch returns nil.
+func Switch(f slotSwitcher, client string, slot int) error {
+	ss, err := f.ListSessions()
 	if err != nil {
 		return err
 	}
 	for _, s := range ss {
-		if s.Slot == slot {
-			return c.SwitchClient(client, s.ID)
+		if s.Slot != slot {
+			continue
 		}
+		if host, _ := fleet.Split(s.ID); host != "" {
+			if _, err := f.Resolve(s.ID); err != nil {
+				return f.Display(client, "ssmux: "+err.Error())
+			}
+		}
+		return f.SwitchClient(client, s.ID)
 	}
 	return nil
 }
@@ -93,6 +106,17 @@ func Main(args []string) int {
 
 var errUsage = fmt.Errorf("usage")
 
+func newFleet(c tmux.Client) (*fleet.Fleet, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	remote := func(h string) tmux.Client {
+		return tmux.Client{Host: h, Timeout: 1500 * time.Millisecond}
+	}
+	return fleet.New(c, hosts.Path(), filepath.Join(home, ".ssh"), remote), nil
+}
+
 func run(args []string) error {
 	c := tmux.Client{}
 	if len(args) == 0 {
@@ -116,7 +140,11 @@ func run(args []string) error {
 		if len(pos) != 0 || RunPopup == nil {
 			return errUsage
 		}
-		return RunPopup(c, client)
+		f, err := newFleet(c)
+		if err != nil {
+			return err
+		}
+		return RunPopup(f, client)
 	case "switch":
 		if len(pos) != 1 {
 			return errUsage
@@ -125,7 +153,11 @@ func run(args []string) error {
 		if err != nil || n < 1 || n > 9 {
 			return errUsage
 		}
-		return Switch(c, client, n)
+		f, err := newFleet(c)
+		if err != nil {
+			return err
+		}
+		return Switch(f, client, n)
 	}
 	return errUsage
 }
