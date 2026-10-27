@@ -126,29 +126,84 @@ func TestUnreachableKeepsPins(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("#!/bin/sh\nexit 255\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	ci := e.remote("ci")
+	pinned := must(t)(ci.NewSession("pinned", ""))
+	loose := must(t)(ci.NewSession("loose", ""))
+	failing := false
 	f := fleet.New(e.local, e.hostsPath, "", func(h string) tmux.Client {
-		if h == "ci" {
+		if h == "ci" && failing {
 			return tmux.Client{Host: h, SSH: bad}
 		}
 		return e.remote(h)
 	})
-	if err := e.local.SetGlobalOption(pinsOpt, "ci,$1,100,5"); err != nil {
+	f.RefreshHost("ci")
+	if err := f.SetSlot("ci/"+pinned, 5); err != nil {
 		t.Fatal(err)
 	}
+	failing = true
 	f.RefreshHost("ci")
 	ss := list(t, f)
-	s, ok := find(ss, "ci/$1")
-	if !ok || s.Status != "unreachable" || s.Slot != 5 {
+	s, ok := find(ss, "ci/"+pinned)
+	if !ok || s.Status != "unreachable" || s.Slot != 5 || s.Name != "pinned" {
 		t.Errorf("pinned ci session = %+v, %v", s, ok)
 	}
-	for _, s := range ss {
-		if s.Host == "ci" && s.ID != "ci/$1" {
-			t.Errorf("unpinned ci session listed: %+v", s)
-		}
+	if s, ok := find(ss, "ci/"+loose); ok {
+		t.Errorf("unpinned ci session listed: %+v", s)
+	}
+	if v := option(t, e.local, pinsOpt); !strings.HasPrefix(v, "ci,"+pinned+",") {
+		t.Errorf("failed refresh changed %s: %q", pinsOpt, v)
 	}
 	h := f.Hosts()[1]
 	if h.Name != "ci" || h.State != fleet.Unreachable || h.Err == "" {
 		t.Errorf("ci status = %+v", h)
+	}
+}
+
+func TestMissingSessionEntriesDropped(t *testing.T) {
+	e := newEnv(t)
+	e.remote("box")
+	if err := e.local.SetGlobalOption(pinsOpt, "box,$99,1,4 ci,$99,1,6"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.local.SetGlobalOption(recentOpt, "box,$99,1,50"); err != nil {
+		t.Fatal(err)
+	}
+	f := e.fleet()
+	f.RefreshHost("box")
+	if v := option(t, e.local, pinsOpt); v != "ci,$99,1,6" {
+		t.Errorf("%s = %q", pinsOpt, v)
+	}
+	if v := option(t, e.local, recentOpt); v != "" {
+		t.Errorf("%s = %q", recentOpt, v)
+	}
+}
+
+func TestKillDropsEntries(t *testing.T) {
+	e := newEnv(t)
+	box := e.remote("box")
+	id := must(t)(box.NewSession("api", ""))
+	created, err := box.Run("display", "-p", "-t", id, "#{session_created}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.local.SetGlobalOption(recentOpt, "box,"+id+","+created+",77"); err != nil {
+		t.Fatal(err)
+	}
+	f := e.fleet()
+	f.RefreshHost("box")
+	if err := f.SetSlot("box/"+id, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.KillSession("box/" + id); err != nil {
+		t.Fatal(err)
+	}
+	for _, opt := range []string{pinsOpt, recentOpt} {
+		if v := option(t, e.local, opt); v != "" {
+			t.Errorf("%s = %q", opt, v)
+		}
+	}
+	if _, ok := find(list(t, f), "box/"+id); ok {
+		t.Error("killed session listed")
 	}
 }
 

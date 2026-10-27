@@ -108,26 +108,37 @@ func (f *Fleet) RefreshHost(name string) {
 	f.dropStale(name, ss)
 }
 
-// dropStale removes entries for IDs that ss lists with a different Created,
-// because the remote server restarted and reused them. Callers hold mu.
+// dropStale removes the host's entries for sessions that ss lacks or lists
+// with a different Created (the remote server restarted and reused the ID).
+// Callers hold mu.
 func (f *Fleet) dropStale(name string, ss []tmux.Session) {
 	created := map[string]int64{}
 	for _, s := range ss {
 		created[s.ID] = s.Created
 	}
-	keep := func(e Entry) bool {
+	// Best effort: a failed write leaves the entries for the next refresh,
+	// and ListSessions never matches them meanwhile.
+	f.dropEntries(func(e Entry) bool {
 		c, ok := created[e.ID]
-		return e.Host != name || !ok || c == e.Created
-	}
+		return e.Host != name || ok && c == e.Created
+	})
+}
+
+// dropEntries rewrites both local options without the entries keep rejects,
+// writing only options that change. Callers hold mu.
+func (f *Fleet) dropEntries(keep func(Entry) bool) error {
 	for _, opt := range []string{pinsOption, recentOption} {
 		es, err := f.entries(opt)
 		if err != nil {
-			continue
+			return err
 		}
 		if kept := Without(es, keep); len(kept) != len(es) {
-			f.local.SetGlobalOption(opt, FormatEntries(kept))
+			if err := f.local.SetGlobalOption(opt, FormatEntries(kept)); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func (f *Fleet) entries(opt string) ([]Entry, error) {
@@ -320,14 +331,20 @@ func (f *Fleet) KillSession(qid string) error {
 	if err := c.KillSession(id); err != nil {
 		return err
 	}
-	f.cached(qid, func(h *host, id string) {
+	name, _ := Split(qid)
+	if name == "" {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.host(name); h != nil {
 		h.sessions = slices.DeleteFunc(h.sessions, func(s tmux.Session) bool { return s.ID == id })
-	})
-	return nil
+	}
+	return f.dropEntries(func(e Entry) bool { return e.Host != name || e.ID != id })
 }
 
 // cached runs fn under mu on the cached host of a remote qualified ID, so
-// renames and kills show up before the next refresh.
+// renames show up before the next refresh.
 func (f *Fleet) cached(qid string, fn func(h *host, id string)) {
 	name, id := Split(qid)
 	f.mu.Lock()
@@ -378,15 +395,5 @@ func (f *Fleet) RemoveHost(name string) error {
 		return err
 	}
 	f.hosts = slices.DeleteFunc(f.hosts, func(h *host) bool { return h.Name == name })
-	for _, opt := range []string{pinsOption, recentOption} {
-		es, err := f.entries(opt)
-		if err != nil {
-			return err
-		}
-		kept := Without(es, func(e Entry) bool { return e.Host != name })
-		if err := f.local.SetGlobalOption(opt, FormatEntries(kept)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return f.dropEntries(func(e Entry) bool { return e.Host != name })
 }
