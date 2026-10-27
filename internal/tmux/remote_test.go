@@ -44,7 +44,9 @@ func TestRemoteQuoting(t *testing.T) {
 
 func TestRemoteTimeout(t *testing.T) {
 	ssh := filepath.Join(t.TempDir(), "slow")
-	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+	// A live master, so Timeout applies rather than the cold-connect limit.
+	script := "#!/bin/sh\nfor a; do [ \"$a\" = -O ] && exit 0; done\nexec sleep 5\n"
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	c := tmux.Client{Host: "h", SSH: ssh, Timeout: 100 * time.Millisecond}
@@ -73,5 +75,52 @@ func TestRemoteForkedMaster(t *testing.T) {
 	}
 	if out != "out" {
 		t.Errorf("out = %q", out)
+	}
+}
+
+// slowSSH writes a fake ssh whose calls sleep for delay and then leave a
+// master behind, and which answers "-O check" by whether one exists.
+func slowSSH(t *testing.T, delay string) string {
+	t.Helper()
+	dir := t.TempDir()
+	ssh := filepath.Join(dir, "ssh")
+	mark := filepath.Join(dir, "master")
+	script := "#!/bin/sh\n" +
+		"for a; do if [ \"$a\" = -O ]; then [ -e " + mark + " ] && exit 0; exit 255; fi; done\n" +
+		"sleep " + delay + "\ntouch " + mark + "\necho ok\n"
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return ssh
+}
+
+// A first call has to log in, which may take longer than Timeout; once the
+// master is up, Timeout applies again.
+func TestRemoteColdConnectTimeout(t *testing.T) {
+	c := tmux.Client{Host: "h", SSH: slowSSH(t, "2"), Timeout: 1500 * time.Millisecond}
+	out, err := c.Exec("true")
+	if err != nil || out != "ok" {
+		t.Fatalf("cold call: out = %q, err = %v", out, err)
+	}
+	if _, err := c.Exec("true"); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("warm call: err = %v, want timed out", err)
+	}
+}
+
+// A hanging "ssh -O check" must not hang the call.
+func TestRemoteMasterCheckHangs(t *testing.T) {
+	ssh := filepath.Join(t.TempDir(), "ssh")
+	script := "#!/bin/sh\nfor a; do [ \"$a\" = -O ] && exec sleep 30; done\necho ok\n"
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := tmux.Client{Host: "h", SSH: ssh, Timeout: 1500 * time.Millisecond}
+	start := time.Now()
+	out, err := c.Exec("true")
+	if err != nil || out != "ok" {
+		t.Fatalf("out = %q, err = %v", out, err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %v", d)
 	}
 }

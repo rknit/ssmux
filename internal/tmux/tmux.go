@@ -69,15 +69,21 @@ func (c Client) Exec(cmd string) (string, error) {
 
 // run executes argv and returns trimmed stdout; errors carry stderr.
 func (c Client) run(argv []string) (string, error) {
+	timeout := c.Timeout
 	if c.Host != "" {
 		if err := ensureSSHDir(sshDir()); err != nil {
 			return "", err
 		}
+		// Without a master this call has to log in first, which Timeout
+		// isn't meant to cover.
+		if timeout > 0 && timeout < coldTimeout && !c.masterAlive() {
+			timeout = coldTimeout
+		}
 	}
 	ctx := context.Background()
-	if c.Timeout > 0 {
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)

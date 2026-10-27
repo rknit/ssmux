@@ -2,15 +2,41 @@ package tmux
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
+	"time"
+)
+
+const (
+	// coldTimeout bounds a remote call that has to log in first.
+	coldTimeout = 10 * time.Second
+	// checkTimeout bounds "ssh -O check", a local socket check.
+	checkTimeout = time.Second
 )
 
 // sshDir holds the ssh control sockets shared by all remote calls.
 func sshDir() string { return fmt.Sprintf("/tmp/ssmux-%d", os.Getuid()) }
+
+// controlPath is the ControlPath option value for every ssh call.
+func controlPath() string { return "ControlPath=" + sshDir() + "/cm-%C" }
+
+// masterAlive reports whether a ControlMaster for c.Host is running.
+func (c Client) masterAlive() bool {
+	ssh := c.SSH
+	if ssh == "" {
+		ssh = "ssh"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ssh, "-o", controlPath(), "-O", "check", "--", c.Host)
+	cmd.WaitDelay = 100 * time.Millisecond
+	return cmd.Run() == nil
+}
 
 // ensureSSHDir creates dir if needed and makes sure it is a real directory
 // owned by the current user and private to it, since its path is
@@ -67,7 +93,7 @@ func (c Client) SSHArgs(tty bool) []string {
 	}
 	args := []string{ssh,
 		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=" + sshDir() + "/cm-%C",
+		"-o", controlPath(),
 		"-o", "ControlPersist=10m",
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=3",
