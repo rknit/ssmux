@@ -384,3 +384,52 @@ func TestAddHost(t *testing.T) {
 		t.Error("AddHost accepted '/'")
 	}
 }
+
+// A host that runs sshd and tmux but no tmux server is Connected with no
+// sessions, so the first remote session can be created there.
+func TestRefreshHostWithoutServer(t *testing.T) {
+	ssh, remote := testutil.FakeSSH(t)
+	path := filepath.Join(t.TempDir(), "hosts")
+	if err := os.WriteFile(path, []byte("fresh\nbox\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fresh := tmux.Client{Host: "fresh", SSH: ssh}
+	t.Cleanup(func() { fresh.Run("kill-server") })
+	box := remote("box")
+	f := fleet.New(testutil.NewServer(t), path, "", func(h string) tmux.Client {
+		if h == "fresh" {
+			return fresh
+		}
+		return remote(h)
+	})
+
+	f.RefreshHost("fresh")
+	if h := f.Hosts()[0]; h.State != fleet.Connected || h.Err != "" {
+		t.Fatalf("fresh = %+v", h)
+	}
+	for _, s := range list(t, f) {
+		if s.Host == "fresh" {
+			t.Errorf("unexpected session %+v", s)
+		}
+	}
+	q := must(t)(f.NewSession("fresh", "x"))
+	f.RefreshHost("fresh")
+	if s, ok := find(list(t, f), q); !ok || s.Name != "x" {
+		t.Errorf("x not listed after NewSession: %q", q)
+	}
+
+	// Killing the last session stops the server; the host stays usable.
+	ss, err := box.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range ss {
+		if err := box.KillSession(s.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.RefreshHost("box")
+	if h := f.Hosts()[1]; h.State != fleet.Connected || h.Err != "" {
+		t.Errorf("box after killing all = %+v", h)
+	}
+}

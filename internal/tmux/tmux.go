@@ -138,6 +138,11 @@ func (c Client) ListSessions() ([]Session, error) {
 	}, ":")
 	out, err := c.Run("list-sessions", "-F", format)
 	if err != nil {
+		// A reachable host without a running tmux server has no sessions;
+		// creating one starts the server.
+		if c.Host != "" && noServer(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var ss []Session
@@ -156,6 +161,13 @@ func (c Client) ListSessions() ([]Session, error) {
 		ss = append(ss, s)
 	}
 	return ss, nil
+}
+
+// noServer reports whether err is tmux failing to reach its server.
+func noServer(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no server running on") ||
+		strings.Contains(msg, "error connecting to")
 }
 
 // SetSlot stores slot on the session; slot 0 removes it.
