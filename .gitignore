@@ -1,2 +1,5 @@
 .superpowers/
 docs/superpowers/
+.direnv/
+/ssmux
+result
