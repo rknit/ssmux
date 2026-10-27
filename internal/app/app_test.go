@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/rknit/ssmux/internal/fleet"
+	"github.com/rknit/ssmux/internal/testutil"
 	"github.com/rknit/ssmux/internal/tmux"
 )
 
@@ -93,5 +95,44 @@ func TestMainUnknownArgs(t *testing.T) {
 	}
 	if code := Main([]string{"switch", "x"}); code != 2 {
 		t.Errorf("bad slot exit = %d, want 2", code)
+	}
+}
+
+func TestAttachTargetSkipsWrappers(t *testing.T) {
+	c := testutil.NewServer(t)
+	// "a-wrap" sorts before "base", so it would be picked on a tie.
+	w, err := c.NewSession("a-wrap", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetSessionOption(w, fleet.RemoteOption, "box,$1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := attachTarget(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == w {
+		t.Fatalf("attachTarget picked wrapper %s", w)
+	}
+
+	// With only wrappers left, a new session is created.
+	ss, err := c.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range ss {
+		if s.ID != w {
+			if err := c.KillSession(s.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err = attachTarget(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == w || got == "" {
+		t.Errorf("attachTarget = %q with only wrapper %s", got, w)
 	}
 }

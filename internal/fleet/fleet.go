@@ -13,7 +13,8 @@ import (
 const (
 	pinsOption   = "@ssmux-remote-pins"
 	recentOption = "@ssmux-remote-recent"
-	remoteOption = "@ssmux-remote"
+	// RemoteOption tags the hidden local wrapper sessions.
+	RemoteOption = "@ssmux-remote"
 )
 
 // State is a host's connection state.
@@ -191,7 +192,7 @@ func (f *Fleet) localSessions() ([]tmux.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	wrappers, err := f.local.SessionTags(remoteOption)
+	wrappers, err := f.local.SessionTags(RemoteOption)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +382,7 @@ func (f *Fleet) ClientSession(client string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tags, err := f.local.SessionTags(remoteOption)
+	tags, err := f.local.SessionTags(RemoteOption)
 	if err != nil {
 		return "", err
 	}

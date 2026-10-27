@@ -100,7 +100,7 @@ func (f *Fleet) wrapper(name, id string, created int64) (w string, fallback bool
 	args := []string{"new-session", "-d", "-P", "-F", "#{session_id}", "-s", wname,
 		wrapperCommand(remote, term, id)}
 	for _, o := range [][2]string{
-		{remoteOption, tag}, {"status", "off"}, {"prefix", "None"}, {"prefix2", "None"},
+		{RemoteOption, tag}, {"status", "off"}, {"prefix", "None"}, {"prefix2", "None"},
 		{"detach-on-destroy", "off"}, {"remain-on-exit", "off"},
 	} {
 		args = append(args, ";", "set-option", o[0], o[1])
@@ -117,7 +117,7 @@ func (f *Fleet) wrapper(name, id string, created int64) (w string, fallback bool
 // wrapper whose pane is dead (ssh exited under remain-on-exit) is killed and
 // treated as absent.
 func (f *Fleet) liveWrapper(tag string) (string, error) {
-	out, err := f.local.Run("list-sessions", "-F", "#{session_id} #{pane_dead} #{"+remoteOption+"}")
+	out, err := f.local.Run("list-sessions", "-F", "#{session_id} #{pane_dead} #{"+RemoteOption+"}")
 	if err != nil {
 		return "", err
 	}
@@ -232,7 +232,7 @@ func parseTag(v string) (Entry, bool) {
 
 // killWrappers kills the local wrappers of the host's sessions.
 func (f *Fleet) killWrappers(name string) error {
-	tags, err := f.local.SessionTags(remoteOption)
+	tags, err := f.local.SessionTags(RemoteOption)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -65,6 +66,31 @@ func MostRecent(ss []tmux.Session) (tmux.Session, bool) {
 		}
 	}
 	return best, true
+}
+
+// attachTarget returns the session plain ssmux attaches to: the most recent
+// one that is not a hidden remote wrapper, or a new one in the home
+// directory when there is none.
+func attachTarget(c tmux.Client) (string, error) {
+	if c.HasServer() {
+		ss, err := c.ListSessions()
+		if err != nil {
+			return "", err
+		}
+		wrappers, err := c.SessionTags(fleet.RemoteOption)
+		if err != nil {
+			return "", err
+		}
+		ss = slices.DeleteFunc(ss, func(s tmux.Session) bool { return wrappers[s.ID] != "" })
+		if s, ok := MostRecent(ss); ok {
+			return s.ID, nil
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return c.NewSession("", home)
 }
 
 func executable() (string, error) {
@@ -178,26 +204,12 @@ func attachOrOpen(c tmux.Client) error {
 		return c.OpenPopup(client, exe)
 	}
 
-	var target string
-	if !c.HasServer() {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		if target, err = c.NewSession("", home); err != nil {
-			return err
-		}
+	target, err := attachTarget(c)
+	if err != nil {
+		return err
 	}
 	if err := c.BindKeys(exe); err != nil {
 		return err
-	}
-	if target == "" {
-		ss, err := c.ListSessions()
-		if err != nil {
-			return err
-		}
-		s, _ := MostRecent(ss)
-		target = s.ID
 	}
 	bin, err := exec.LookPath("tmux")
 	if err != nil {
