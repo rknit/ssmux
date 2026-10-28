@@ -119,6 +119,10 @@ type Model struct {
 	rows     []Row
 	cursor   int // index into rows; -1 when there are none
 	filter   string
+	// moved is set once the user moves the cursor or acts on a session.
+	// Until then reload keeps the cursor on the first row, so sessions that
+	// arrive late from remote hosts don't push it down.
+	moved bool
 
 	mode    mode
 	dialogs []dialog // open dialogs, top last; they take all keys
@@ -184,6 +188,10 @@ func (m *Model) reload() {
 		names[i] = h.Name
 	}
 	m.rows = BuildRows(m.sessions, m.current, m.filter, names)
+	if !m.moved {
+		m.cursor = FirstSelectable(m.rows)
+		return
+	}
 	m.cursor = m.find(prev.Session.ID, prev.Section)
 }
 
@@ -210,6 +218,7 @@ func (m Model) find(id string, sec Section) int {
 }
 
 func (m *Model) move(delta int) {
+	m.moved = true
 	for i := m.cursor + delta; i >= 0 && i < len(m.rows); i += delta {
 		if !m.rows[i].Header {
 			m.cursor = i
@@ -219,6 +228,7 @@ func (m *Model) move(delta int) {
 }
 
 func (m *Model) apply(changes []slots.Change) {
+	m.moved = true
 	for _, c := range changes {
 		if err := m.t.SetSlot(c.ID, c.Slot); err != nil {
 			m.err = err.Error()
@@ -530,6 +540,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	value := m.input.Value()
 	switch m.mode {
 	case modeRename:
+		m.moved = true
 		if !m.exists(m.target) {
 			m.err = "session no longer exists"
 			m.endInput()

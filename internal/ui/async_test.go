@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rknit/ssmux/internal/fleet"
 )
 
 // settle runs the command of a pending remote action, which must not have
@@ -163,5 +165,32 @@ func TestRemoteCreateAsync(t *testing.T) {
 	m, cmd = settle(t, f, m, cmd)
 	if isQuit(cmd) || len(m.dialogs) != 0 || m.err != "boom" {
 		t.Errorf("dialogs = %d quit = %v err = %q", len(m.dialogs), isQuit(cmd), m.err)
+	}
+}
+
+// A remote session that arrives newer than the top RECENT row takes the
+// cursor's place as long as the user hasn't moved it; after that the cursor
+// stays on its session.
+func TestLateRemoteKeepsCursorOnTop(t *testing.T) {
+	for _, moved := range []bool{false, true} {
+		f := hostsFake()
+		f.current = ""
+		f.hosts[0].State = fleet.Connecting
+		f.sessions[1].LastAttached = 60
+		m := sized(New(f, "c"), 100, 30)
+		if id := m.Selected().Session.ID; id != "$1" {
+			t.Fatalf("selected %s before refresh", id)
+		}
+		if moved {
+			m, _ = press(t, m, "down", "up")
+		}
+		m, _ = update(m, msgs(refreshHost(f, "box", 0, 0))[0])
+		want := "box/$1"
+		if moved {
+			want = "$1"
+		}
+		if id := m.Selected().Session.ID; id != want {
+			t.Errorf("moved=%v: selected %s after refresh, want %s", moved, id, want)
+		}
 	}
 }

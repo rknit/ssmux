@@ -34,7 +34,7 @@ func cursorOn(t *testing.T, m Model, id string) Model {
 	t.Helper()
 	for i, r := range m.rows {
 		if !r.Header && r.Session.ID == id {
-			m.cursor = i
+			m.cursor, m.moved = i, true
 			return m
 		}
 	}
