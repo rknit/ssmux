@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -64,6 +65,35 @@ func (f *Fleet) SwitchClient(client, qid string) error {
 			"ssmux: %s has no terminfo for %s, using %s", name, f.Term, fallbackTerm))
 	}
 	return errors.Join(derr, f.touch(name, id, s))
+}
+
+// LastRemote returns the RECENT entry of the remote session used last.
+func (f *Fleet) LastRemote() (Entry, bool) {
+	f.mu.Lock()
+	recent, err := f.entries(recentOption)
+	f.mu.Unlock()
+	if err != nil || len(recent) == 0 {
+		return Entry{}, false
+	}
+	return slices.MaxFunc(recent, func(a, b Entry) int { return cmp.Compare(a.Value, b.Value) }), true
+}
+
+// Wrap returns the wrapper of the remote session e refers to, creating it if
+// needed, and records the session as used now. It fails if the session is
+// gone, even if its ID was reused.
+func (f *Fleet) Wrap(e Entry) (string, error) {
+	s, err := f.Resolve(Qualify(e.Host, e.ID))
+	if err != nil {
+		return "", err
+	}
+	if s.Created != e.Created {
+		return "", fmt.Errorf("can't find session: %s", Qualify(e.Host, e.ID))
+	}
+	w, _, err := f.wrapper(e.Host, e.ID, s.Created)
+	if err != nil {
+		return "", err
+	}
+	return w, f.touch(e.Host, e.ID, s)
 }
 
 // Resolve checks that a session still exists and returns it with its

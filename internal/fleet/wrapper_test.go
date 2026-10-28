@@ -452,6 +452,37 @@ func TestRemoteDetachDetachesClient(t *testing.T) {
 	})
 }
 
+func TestLastRemote(t *testing.T) {
+	e := newEnv(t)
+	f := e.fleet()
+	if _, ok := f.LastRemote(); ok {
+		t.Fatal("LastRemote with no RECENT entries")
+	}
+	if _, err := e.local.Run("set-option", "-g", recentOpt, "box,$1,10,300 ci,$2,20,500 box,$3,30,400"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := f.LastRemote(); !ok || got != (fleet.Entry{Host: "ci", ID: "$2", Created: 20, Value: 500}) {
+		t.Errorf("LastRemote = %+v, %v", got, ok)
+	}
+}
+
+func TestWrap(t *testing.T) {
+	s := newSwitchEnv(t)
+	w, err := s.f.Wrap(fleet.Entry{Host: "box", ID: s.id, Created: s.created})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.wrapperID(t); got != w {
+		t.Errorf("Wrap = %q, wrapper %q", w, got)
+	}
+	if e, ok := s.f.LastRemote(); !ok || e.ID != s.id || e.Value == 0 {
+		t.Errorf("LastRemote = %+v, %v", e, ok)
+	}
+	if _, err := s.f.Wrap(fleet.Entry{Host: "box", ID: s.id, Created: s.created + 1}); err == nil {
+		t.Error("Wrap of a reused ID succeeded")
+	}
+}
+
 func TestKillWrappedKeepsClient(t *testing.T) {
 	s := newSwitchEnv(t)
 	s.switchTo(t)

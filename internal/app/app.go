@@ -68,10 +68,17 @@ func MostRecent(ss []tmux.Session) (tmux.Session, bool) {
 	return best, true
 }
 
+// remoteAttacher reattaches a remote session through its wrapper.
+type remoteAttacher interface {
+	LastRemote() (fleet.Entry, bool)
+	Wrap(e fleet.Entry) (string, error)
+}
+
 // attachTarget returns the session plain ssmux attaches to: the most recent
-// one that is not a hidden remote wrapper, or a new one in the home
-// directory when there is none.
-func attachTarget(c tmux.Client) (string, error) {
+// one that is not a hidden remote wrapper, or the wrapper of the remote
+// session used last if that is more recent and still reachable, or a new one
+// in the home directory when there is none.
+func attachTarget(c tmux.Client, r remoteAttacher) (string, error) {
 	if c.HasServer() {
 		ss, err := c.ListSessions()
 		if err != nil {
@@ -82,7 +89,13 @@ func attachTarget(c tmux.Client) (string, error) {
 			return "", err
 		}
 		ss = slices.DeleteFunc(ss, func(s tmux.Session) bool { return wrappers[s.ID] != "" })
-		if s, ok := MostRecent(ss); ok {
+		s, ok := MostRecent(ss)
+		if e, rok := r.LastRemote(); rok && (!ok || e.Value > s.LastAttached) {
+			if w, err := r.Wrap(e); err == nil {
+				return w, nil
+			}
+		}
+		if ok {
 			return s.ID, nil
 		}
 	}
@@ -210,7 +223,11 @@ func attachOrOpen(c tmux.Client) error {
 		return c.OpenPopup(client, exe)
 	}
 
-	target, err := attachTarget(c)
+	f, err := newFleet(c)
+	if err != nil {
+		return err
+	}
+	target, err := attachTarget(c, f)
 	if err != nil {
 		return err
 	}

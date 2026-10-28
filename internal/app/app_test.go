@@ -97,6 +97,49 @@ func TestMainUnknownArgs(t *testing.T) {
 	}
 }
 
+type fakeAttacher struct {
+	last    fleet.Entry
+	ok      bool
+	wrapErr error
+}
+
+func (f *fakeAttacher) LastRemote() (fleet.Entry, bool) { return f.last, f.ok }
+
+func (f *fakeAttacher) Wrap(e fleet.Entry) (string, error) {
+	if f.wrapErr != nil {
+		return "", f.wrapErr
+	}
+	return "wrap:" + e.ID, nil
+}
+
+func TestAttachTargetRemote(t *testing.T) {
+	c := testutil.NewServer(t)
+	ss, err := c.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ss[0]
+	tests := []struct {
+		name string
+		r    *fakeAttacher
+		want string
+	}{
+		{"remote newer", &fakeAttacher{last: fleet.Entry{Host: "box", ID: "$1", Value: base.LastAttached + 1}, ok: true}, "wrap:$1"},
+		{"local newer", &fakeAttacher{last: fleet.Entry{Host: "box", ID: "$1", Value: base.LastAttached - 1}, ok: true}, base.ID},
+		{"remote gone", &fakeAttacher{last: fleet.Entry{Host: "box", ID: "$1", Value: base.LastAttached + 1}, ok: true, wrapErr: errors.New("gone")}, base.ID},
+		{"no remote", &fakeAttacher{}, base.ID},
+	}
+	for _, tt := range tests {
+		got, err := attachTarget(c, tt.r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tt.want {
+			t.Errorf("%s: attachTarget = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestAttachTargetSkipsWrappers(t *testing.T) {
 	c := testutil.NewServer(t)
 	// "a-wrap" sorts before "base", so it would be picked on a tie.
@@ -107,7 +150,7 @@ func TestAttachTargetSkipsWrappers(t *testing.T) {
 	if err := c.SetSessionOption(w, fleet.RemoteOption, "box,$1"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := attachTarget(c)
+	got, err := attachTarget(c, &fakeAttacher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +170,7 @@ func TestAttachTargetSkipsWrappers(t *testing.T) {
 			}
 		}
 	}
-	got, err = attachTarget(c)
+	got, err = attachTarget(c, &fakeAttacher{})
 	if err != nil {
 		t.Fatal(err)
 	}
