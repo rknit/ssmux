@@ -201,10 +201,14 @@ func (f *Fleet) wrapperName() (string, error) {
 // lives on, the local clients on the wrapper detach too, so one prefix+d
 // leaves tmux. It runs through /bin/sh rather than default-shell, whose
 // startup can be slow.
+//
+// The remote client claims synchronized output so it wraps each redraw in
+// DECSET 2026; a local tmux that passes that on to the terminal then shows
+// redraws that arrive over ssh in pieces at once instead of flickering.
 func wrapperCommand(remote tmux.Client, term, id string) []string {
 	q := tmux.ShellQuote(id)
 	argv := append([]string{"env", "TERM=" + term}, remote.SSHArgs(true)...)
-	argv = append(argv, "tmux attach -t "+q+" && tmux has-session -t "+q+" 2>/dev/null")
+	argv = append(argv, "tmux -T sync attach -t "+q+" && tmux has-session -t "+q+" 2>/dev/null")
 	for i, a := range argv {
 		argv[i] = tmux.ShellQuote(a)
 	}

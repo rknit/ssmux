@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -398,6 +399,15 @@ func TestWrapperAttachesRemote(t *testing.T) {
 	eventually(t, func() bool {
 		cs, _ := s.remote("box").Run("list-clients", "-F", "#{session_id}")
 		return cs == s.id
+	})
+}
+
+func TestWrapperClaimsSync(t *testing.T) {
+	s := newSwitchEnv(t)
+	s.switchTo(t)
+	eventually(t, func() bool {
+		fs, _ := s.remote("box").Run("list-clients", "-F", "#{client_termfeatures}")
+		return slices.Contains(strings.Split(fs, ","), "sync")
 	})
 }
 
