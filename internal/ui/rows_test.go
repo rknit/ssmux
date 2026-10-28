@@ -65,6 +65,24 @@ func TestRowsEmptySectionHasNoHeader(t *testing.T) {
 	}
 }
 
+func TestRowsRecentSkipsNeverAttached(t *testing.T) {
+	ss := []tmux.Session{
+		{ID: "$1", Name: "cur", LastAttached: 3},
+		{ID: "$2", Name: "used", LastAttached: 2},
+		{ID: "box/$1", Name: "api", Host: "box"},
+		{ID: "$3", Name: "detached"},
+	}
+	var recent []string
+	for _, r := range BuildRows(ss, "$1", "", []string{"box"}) {
+		if !r.Header && r.Section == SectionRecent {
+			recent = append(recent, r.Session.Name)
+		}
+	}
+	if len(recent) != 1 || recent[0] != "used" {
+		t.Errorf("recent = %v, want [used]", recent)
+	}
+}
+
 func TestRowsFilter(t *testing.T) {
 	for _, r := range BuildRows(sampleSessions(), "$1", "API", nil) {
 		if !r.Header && r.Session.Name != "api-server" && r.Session.Name != "api-client" {

@@ -26,7 +26,8 @@ type Row struct {
 	Current bool
 }
 
-// BuildRows lays out RECENT (newest 3, excluding the current session),
+// BuildRows lays out RECENT (newest 3 ever attached, excluding the current
+// session),
 // PINNED (occupied slots only, by slot) and UNPINNED (local sessions, then
 // each host's in hosts order, by name). Sections with no sessions get no
 // header. filter matches names or hosts case-insensitively.
@@ -51,7 +52,7 @@ func BuildRows(ss []tmux.Session, currentID, filter string, hosts []string) []Ro
 
 	var recent, pinned, unpinned []tmux.Session
 	for _, s := range kept {
-		if s.ID != currentID {
+		if s.ID != currentID && s.LastAttached > 0 {
 			recent = append(recent, s)
 		}
 		if s.Slot != 0 {
