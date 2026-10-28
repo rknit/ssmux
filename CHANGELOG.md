@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/rknit/ssmux/compare/v1.2.0...v1.3.0) (2026-10-28)
+
+
+### Features
+
+* adjust dialog border color and weight ([f9022e5](https://github.com/rknit/ssmux/commit/f9022e51b62aeaec32fe8cf06327a40cbd8dd435))
+
 ## [1.2.0](https://github.com/rknit/ssmux/compare/v1.1.0...v1.2.0) (2026-10-28)
 
 
