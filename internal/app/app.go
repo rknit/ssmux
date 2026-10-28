@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"syscall"
@@ -20,7 +21,8 @@ const usage = `usage:
   ssmux                         attach to the last session, or open the popup inside tmux
   ssmux open   [--client C]     open the popup on client C
   ssmux popup  [--client C]     run the session picker (used inside the popup)
-  ssmux switch N [--client C]   switch client C to the session pinned on slot N`
+  ssmux switch N [--client C]   switch client C to the session pinned on slot N
+  ssmux version                 print the version`
 
 // RunPopup runs the picker UI. It is set by main to avoid an import cycle in tests.
 var RunPopup func(f *fleet.Fleet, client string) error
@@ -184,6 +186,12 @@ func run(args []string) error {
 			return err
 		}
 		return Switch(f, client, n)
+	case "version":
+		if len(args) != 1 {
+			return errUsage
+		}
+		fmt.Println(versionString(debug.ReadBuildInfo()))
+		return nil
 	}
 	return errUsage
 }

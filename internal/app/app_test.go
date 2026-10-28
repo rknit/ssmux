@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"reflect"
+	"runtime/debug"
 	"testing"
 
 	"github.com/rknit/ssmux/internal/fleet"
@@ -96,6 +97,9 @@ func TestMainUnknownArgs(t *testing.T) {
 	if code := Main([]string{"switch", "x"}); code != 2 {
 		t.Errorf("bad slot exit = %d, want 2", code)
 	}
+	if code := Main([]string{"version", "x"}); code != 2 {
+		t.Errorf("version with args exit = %d, want 2", code)
+	}
 }
 
 func TestAttachTargetSkipsWrappers(t *testing.T) {
@@ -134,5 +138,43 @@ func TestAttachTargetSkipsWrappers(t *testing.T) {
 	}
 	if got == w || got == "" {
 		t.Errorf("attachTarget = %q with only wrapper %s", got, w)
+	}
+}
+
+func TestVersionString(t *testing.T) {
+	// the nix build sets Version through ldflags for tests too
+	origVersion := Version
+	t.Cleanup(func() { Version = origVersion })
+
+	tests := []struct {
+		name    string
+		version string
+		info    *debug.BuildInfo
+		want    string
+	}{
+		{"build info", "", &debug.BuildInfo{Main: debug.Module{Version: "v0.9.0"}}, "ssmux v0.9.0"},
+		{"devel with vcs", "", &debug.BuildInfo{
+			Main:     debug.Module{Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc1234def5678"}},
+		}, "ssmux dev-abc1234"},
+		{"devel with dirty vcs", "", &debug.BuildInfo{
+			Main: debug.Module{Version: "(devel)"},
+			Settings: []debug.BuildSetting{
+				{Key: "vcs.revision", Value: "abc1234def5678"},
+				{Key: "vcs.modified", Value: "true"},
+			},
+		}, "ssmux dev-abc1234-dirty"},
+		{"devel without vcs", "", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, "ssmux dev"},
+		{"pseudo-version", "", &debug.BuildInfo{Main: debug.Module{Version: "v1.1.1-0.20261028000000-abcdef123456"}}, "ssmux dev-abcdef1"},
+		{"no build info", "", nil, "ssmux dev"},
+		{"ldflags without v", "1.2.3", &debug.BuildInfo{Main: debug.Module{Version: "v0.9.0"}}, "ssmux v1.2.3"},
+		{"ldflags with v", "v1.2.3", nil, "ssmux v1.2.3"},
+		{"ldflags malformed", "1.2", nil, "ssmux dev"},
+	}
+	for _, tt := range tests {
+		Version = tt.version
+		if got := versionString(tt.info, tt.info != nil); got != tt.want {
+			t.Errorf("%s: got %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
