@@ -1,0 +1,22 @@
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    targets: [darwin_arm64, linux_amd64]
+    ldflags:
+      - -s -w
+      - -X github.com/rknit/ssmux/internal/app.Version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+
+checksum:
+  name_template: checksums.txt
+
+# release-please writes the release notes; goreleaser only uploads artifacts.
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
