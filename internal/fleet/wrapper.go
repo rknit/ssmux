@@ -167,11 +167,18 @@ func (f *Fleet) wrapperName() (string, error) {
 }
 
 // wrapperCommand is the command a wrapper runs: ssh with a tty attaching to
-// session id on the host. As separate arguments, tmux execs it directly
-// instead of through default-shell, so only the remote command is quoted.
+// session id on the host. If the remote client detaches while the session
+// lives on, the local clients on the wrapper detach too, so one prefix+d
+// leaves tmux. It runs through /bin/sh rather than default-shell, whose
+// startup can be slow.
 func wrapperCommand(remote tmux.Client, term, id string) []string {
+	q := tmux.ShellQuote(id)
 	argv := append([]string{"env", "TERM=" + term}, remote.SSHArgs(true)...)
-	return append(argv, "tmux attach -t "+tmux.ShellQuote(id))
+	argv = append(argv, "tmux attach -t "+q+" && tmux has-session -t "+q+" 2>/dev/null")
+	for i, a := range argv {
+		argv[i] = tmux.ShellQuote(a)
+	}
+	return []string{"/bin/sh", "-c", strings.Join(argv, " ") + ` && exec tmux detach-client -s "$TMUX_PANE"`}
 }
 
 // touch records now as the RECENT time of a remote session and caches the

@@ -435,6 +435,23 @@ func TestWrapperClosesWhenRemoteKilled(t *testing.T) {
 	eventually(t, func() bool { return len(wrappers(t, s.local)) == 0 })
 }
 
+func TestRemoteDetachDetachesClient(t *testing.T) {
+	s := newSwitchEnv(t)
+	s.switchTo(t)
+	s.wrapperID(t)
+	eventually(t, func() bool {
+		cs, _ := s.remote("box").Run("list-clients", "-F", "#{session_id}")
+		return cs == s.id
+	})
+	if _, err := s.remote("box").Run("detach-client", "-s", s.id); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool {
+		cs, _ := s.local.Run("list-clients", "-F", "#{client_name}")
+		return !strings.Contains(cs, s.client)
+	})
+}
+
 func TestKillWrappedKeepsClient(t *testing.T) {
 	s := newSwitchEnv(t)
 	s.switchTo(t)
