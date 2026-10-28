@@ -4,6 +4,7 @@
   "packages": {
     ".": {
       "release-type": "go",
+      "skip-changelog": true,
       "extra-files": [{ "type": "generic", "path": "flake.nix" }]
     }
   }
