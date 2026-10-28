@@ -29,14 +29,13 @@ var RunPopup func(f *fleet.Fleet, client string) error
 
 type slotSwitcher interface {
 	ListSessions() ([]tmux.Session, error)
-	Resolve(qid string) (tmux.Session, error)
 	SwitchClient(client, qid string) error
 	Display(client, msg string) error
 }
 
 // Switch moves client to the session on slot. An empty slot is a silent no-op.
-// A remote pin is resolved over ssh first; if its host is unreachable or the
-// session is gone, the reason is shown on the client and Switch returns nil.
+// If a remote pin's host is unreachable or the session is gone, the reason
+// is shown on the client and Switch returns nil.
 func Switch(f slotSwitcher, client string, slot int) error {
 	ss, err := f.ListSessions()
 	if err != nil {
@@ -46,12 +45,11 @@ func Switch(f slotSwitcher, client string, slot int) error {
 		if s.Slot != slot {
 			continue
 		}
-		if host, _ := fleet.Split(s.ID); host != "" {
-			if _, err := f.Resolve(s.ID); err != nil {
-				return f.Display(client, "ssmux: "+err.Error())
-			}
+		err := f.SwitchClient(client, s.ID)
+		if host, _ := fleet.Split(s.ID); host != "" && err != nil {
+			return f.Display(client, "ssmux: "+err.Error())
 		}
-		return f.SwitchClient(client, s.ID)
+		return err
 	}
 	return nil
 }

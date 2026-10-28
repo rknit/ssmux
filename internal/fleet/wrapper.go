@@ -31,6 +31,22 @@ func (f *Fleet) SwitchClient(client, qid string) error {
 	if name == "" {
 		return f.local.SwitchClient(client, id)
 	}
+	// A live wrapper's ssh is still attached, so the session exists and
+	// switching needs no round trip to the host.
+	if s, ok := f.known(name, id); ok {
+		f.wmu.Lock()
+		w, err := f.liveWrapper(Entry{Host: name, ID: id, Created: s.Created}.Key())
+		f.wmu.Unlock()
+		if err != nil {
+			return err
+		}
+		if w != "" {
+			if err := f.local.SwitchClient(client, w); err != nil {
+				return err
+			}
+			return f.touch(name, id, s)
+		}
+	}
 	s, err := f.Resolve(qid)
 	if err != nil {
 		return err
@@ -97,8 +113,8 @@ func (f *Fleet) wrapper(name, id string, created int64) (w string, fallback bool
 	// makes them its target, so they apply before ssh can exit.
 	// remain-on-exit off makes the wrapper close when ssh exits even if the
 	// user enables it globally.
-	args := []string{"new-session", "-d", "-P", "-F", "#{session_id}", "-s", wname,
-		wrapperCommand(remote, term, id)}
+	args := append([]string{"new-session", "-d", "-P", "-F", "#{session_id}", "-s", wname},
+		wrapperCommand(remote, term, id)...)
 	for _, o := range [][2]string{
 		{RemoteOption, tag}, {"status", "off"}, {"prefix", "None"}, {"prefix2", "None"},
 		{"detach-on-destroy", "off"}, {"remain-on-exit", "off"},
@@ -150,16 +166,12 @@ func (f *Fleet) wrapperName() (string, error) {
 	}
 }
 
-// wrapperCommand is the shell command a wrapper runs: ssh with a tty
-// attaching to session id on the host. The remote command is quoted twice:
-// once for the local shell and once for the remote one.
-func wrapperCommand(remote tmux.Client, term, id string) string {
-	q := []string{"env", tmux.ShellQuote("TERM=" + term)}
-	for _, a := range remote.SSHArgs(true) {
-		q = append(q, tmux.ShellQuote(a))
-	}
-	q = append(q, tmux.ShellQuote("tmux attach -t "+tmux.ShellQuote(id)))
-	return strings.Join(q, " ")
+// wrapperCommand is the command a wrapper runs: ssh with a tty attaching to
+// session id on the host. As separate arguments, tmux execs it directly
+// instead of through default-shell, so only the remote command is quoted.
+func wrapperCommand(remote tmux.Client, term, id string) []string {
+	argv := append([]string{"env", "TERM=" + term}, remote.SSHArgs(true)...)
+	return append(argv, "tmux attach -t "+tmux.ShellQuote(id))
 }
 
 // touch records now as the RECENT time of a remote session and caches the
@@ -176,7 +188,8 @@ func (f *Fleet) touch(name, id string, s tmux.Session) error {
 		return err
 	}
 	h := f.host(name)
-	if h == nil {
+	// A session known only from its pin has no name or windows to cache.
+	if h == nil || s.Name == "" {
 		return nil
 	}
 	s.ID = id
@@ -187,6 +200,30 @@ func (f *Fleet) touch(name, id string, s tmux.Session) error {
 		h.sessions = append(slices.DeleteFunc(h.sessions, func(x tmux.Session) bool { return x.ID == id }), s)
 	}
 	return nil
+}
+
+// known returns a remote session from the cached listing, else from its pin
+// with only Created set.
+func (f *Fleet) known(name, id string) (tmux.Session, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.host(name); h != nil {
+		for _, s := range h.sessions {
+			if s.ID == id {
+				return s, true
+			}
+		}
+	}
+	pins, err := f.entries(pinsOption)
+	if err != nil {
+		return tmux.Session{}, false
+	}
+	for _, e := range pins {
+		if e.Host == name && e.ID == id {
+			return tmux.Session{Created: e.Created}, true
+		}
+	}
+	return tmux.Session{}, false
 }
 
 // startRefresh numbers a new refresh of the host and returns its sequence

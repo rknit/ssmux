@@ -12,21 +12,16 @@ import (
 )
 
 type fakeSwitcher struct {
-	sessions   []tmux.Session
-	resolveErr error
-	calls      []string
+	sessions  []tmux.Session
+	switchErr error
+	calls     []string
 }
 
 func (f *fakeSwitcher) ListSessions() ([]tmux.Session, error) { return f.sessions, nil }
 
-func (f *fakeSwitcher) Resolve(qid string) (tmux.Session, error) {
-	f.calls = append(f.calls, "Resolve "+qid)
-	return tmux.Session{ID: qid}, f.resolveErr
-}
-
 func (f *fakeSwitcher) SwitchClient(client, qid string) error {
 	f.calls = append(f.calls, "SwitchClient "+client+" "+qid)
-	return nil
+	return f.switchErr
 }
 
 func (f *fakeSwitcher) Display(client, msg string) error {
@@ -59,7 +54,7 @@ func TestSwitchRemotePin(t *testing.T) {
 	if err := Switch(f, "c", 4); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Resolve box/$3", "SwitchClient c box/$3"}
+	want := []string{"SwitchClient c box/$3"}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Errorf("calls = %v, want %v", f.calls, want)
 	}
@@ -68,13 +63,13 @@ func TestSwitchRemotePin(t *testing.T) {
 func TestSwitchUnreachableDisplays(t *testing.T) {
 	msg := "ssh: connect to host box port 22: Operation timed out"
 	f := &fakeSwitcher{
-		sessions:   []tmux.Session{{ID: "box/$3", Slot: 4}},
-		resolveErr: errors.New(msg),
+		sessions:  []tmux.Session{{ID: "box/$3", Slot: 4}},
+		switchErr: errors.New(msg),
 	}
 	if err := Switch(f, "c", 4); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Resolve box/$3", "Display c ssmux: " + msg}
+	want := []string{"SwitchClient c box/$3", "Display c ssmux: " + msg}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Errorf("calls = %v, want %v", f.calls, want)
 	}

@@ -36,7 +36,8 @@ func (c Client) OpenPopup(client, exe string) error {
 	if client != "" {
 		args = append(args, "-c", client)
 	}
-	cmd := ShellQuote(exe) + " popup --client " + ShellQuote(client)
-	_, err := c.Run(append(args, cmd)...)
+	// Separate arguments make tmux exec the command directly instead of
+	// through default-shell, whose startup can take hundreds of ms.
+	_, err := c.Run(append(args, exe, "popup", "--client", client)...)
 	return err
 }

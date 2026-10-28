@@ -208,6 +208,31 @@ func TestSwitchUncachedSession(t *testing.T) {
 	}
 }
 
+// TestSwitchLiveWrapperSkipsSSH switches a fresh fleet, which only knows the
+// session from its pin, to a session whose wrapper is live, with ssh broken.
+func TestSwitchLiveWrapperSkipsSSH(t *testing.T) {
+	s := newSwitchEnv(t)
+	s.switchTo(t)
+	w := s.wrapperID(t)
+	if err := s.f.SetSlot(s.q, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.local.SwitchClient(s.client, "base"); err != nil {
+		t.Fatal(err)
+	}
+	f := fleet.New(s.local, s.hostsPath, "", func(h string) tmux.Client {
+		c := s.remote(h)
+		c.SSH = "false"
+		return c
+	})
+	if err := f.SwitchClient(s.client, s.q); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.local.ClientSession(s.client); got != w {
+		t.Errorf("client on %q, want wrapper %q", got, w)
+	}
+}
+
 // slowRefresh is a fleet whose next RefreshHost, once armed, lists the
 // sessions and then waits for resume before returning the listing.
 type slowRefresh struct {
