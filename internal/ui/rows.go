@@ -16,8 +16,6 @@ const (
 	SectionUnpinned
 )
 
-const recentCount = 3
-
 // Row is one line of the session list: a section header or a session.
 type Row struct {
 	Header  bool
@@ -26,11 +24,12 @@ type Row struct {
 	Current bool
 }
 
-// BuildRows lays out RECENT (newest 3 ever attached, excluding the current
-// session),
-// PINNED (occupied slots only, by slot) and UNPINNED (local sessions, then
-// each host's in hosts order, by name). Sections with no sessions get no
-// header. filter matches names or hosts case-insensitively.
+// BuildRows lays out RECENT (every session ever attached, newest first,
+// excluding the current session), PINNED (occupied slots only, by slot) and
+// UNPINNED (local sessions, then each host's in hosts order, by name).
+// Sections with no sessions get no header. filter matches names or hosts
+// case-insensitively; while filtering, each match is listed once, pinned
+// then unpinned, with no headers or RECENT.
 func BuildRows(ss []tmux.Session, currentID, filter string, hosts []string) []Row {
 	filter = strings.ToLower(filter)
 	var kept []tmux.Session
@@ -62,7 +61,6 @@ func BuildRows(ss []tmux.Session, currentID, filter string, hosts []string) []Ro
 		}
 	}
 	sort.SliceStable(recent, func(i, j int) bool { return recent[i].LastAttached > recent[j].LastAttached })
-	recent = recent[:min(len(recent), recentCount)]
 	sort.SliceStable(pinned, func(i, j int) bool { return pinned[i].Slot < pinned[j].Slot })
 	sort.SliceStable(unpinned, func(i, j int) bool {
 		a, b := unpinned[i], unpinned[j]
@@ -80,7 +78,13 @@ func BuildRows(ss []tmux.Session, currentID, filter string, hosts []string) []Ro
 		if len(list) == 0 {
 			return
 		}
-		rows = append(rows, Row{Header: true, Section: sec})
+		if filter != "" {
+			if sec == SectionRecent {
+				return
+			}
+		} else {
+			rows = append(rows, Row{Header: true, Section: sec})
+		}
 		for _, s := range list {
 			rows = append(rows, Row{Section: sec, Session: s, Current: s.ID == currentID})
 		}

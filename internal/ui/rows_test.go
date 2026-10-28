@@ -43,6 +43,7 @@ func TestRowsSections(t *testing.T) {
 		{Section: SectionRecent, Name: "api-server"},
 		{Section: SectionRecent, Name: "api-client"},
 		{Section: SectionRecent, Name: "notes"},
+		{Section: SectionRecent, Name: "scratch"},
 		{Header: true, Section: SectionPinned},
 		{Section: SectionPinned, Name: "foo", Current: true},
 		{Section: SectionPinned, Name: "api-server"},
@@ -84,10 +85,13 @@ func TestRowsRecentSkipsNeverAttached(t *testing.T) {
 }
 
 func TestRowsFilter(t *testing.T) {
-	for _, r := range BuildRows(sampleSessions(), "$1", "API", nil) {
-		if !r.Header && r.Session.Name != "api-server" && r.Session.Name != "api-client" {
-			t.Errorf("filter kept %q", r.Session.Name)
-		}
+	got := view(BuildRows(sampleSessions(), "$1", "API", nil))
+	want := []rowView{
+		{Section: SectionPinned, Name: "api-server"},
+		{Section: SectionUnpinned, Name: "api-client"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got\n%+v\nwant\n%+v", got, want)
 	}
 }
 
