@@ -16,7 +16,8 @@
           "-X github.com/rknit/ssmux/internal/app.Commit=${inputs.self.rev or inputs.self.dirtyRev or "unknown"}"
         ];
         vendorHash = "sha256-ehI0eDXfeywbxf7nwji1jPVDVaiFU34SF+DhqCA2cGQ=";
-        nativeCheckInputs = [ pkgs.tmux ];
+        # ncurses provides infocmp, which wrapper tests run to check terminfo
+        nativeCheckInputs = [ pkgs.tmux pkgs.ncurses ];
         # tests start tmux servers on unix sockets
         __darwinAllowLocalNetworking = true;
       };
