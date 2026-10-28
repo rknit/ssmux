@@ -32,7 +32,7 @@ func (c Client) BindKeys(exe string) error {
 
 // OpenPopup shows the ssmux popup on client.
 func (c Client) OpenPopup(client, exe string) error {
-	args := []string{"display-popup", "-E", "-w", "80%", "-h", "80%"}
+	args := []string{"display-popup", "-E", "-w", "80%", "-h", "80%", "-b", "heavy", "-S", "fg=magenta"}
 	if client != "" {
 		args = append(args, "-c", client)
 	}
