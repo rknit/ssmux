@@ -142,6 +142,11 @@ func TestAttachTargetSkipsWrappers(t *testing.T) {
 }
 
 func TestVersionString(t *testing.T) {
+	// the nix build sets Version and Commit through ldflags for tests too
+	origVersion, origCommit := Version, Commit
+	t.Cleanup(func() { Version, Commit = origVersion, origCommit })
+	Version, Commit = "", ""
+
 	info := &debug.BuildInfo{
 		Main: debug.Module{Version: "(devel)"},
 		Settings: []debug.BuildSetting{
@@ -156,7 +161,6 @@ func TestVersionString(t *testing.T) {
 		t.Errorf("no build info: got %q, want %q", got, want)
 	}
 	Version, Commit = "1.2.3", "def456"
-	t.Cleanup(func() { Version, Commit = "", "" })
 	if got, want := versionString(info, true), "ssmux 1.2.3 (def456)"; got != want {
 		t.Errorf("ldflags: got %q, want %q", got, want)
 	}
