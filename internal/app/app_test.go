@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"reflect"
+	"runtime/debug"
 	"testing"
 
 	"github.com/rknit/ssmux/internal/fleet"
@@ -96,6 +97,9 @@ func TestMainUnknownArgs(t *testing.T) {
 	if code := Main([]string{"switch", "x"}); code != 2 {
 		t.Errorf("bad slot exit = %d, want 2", code)
 	}
+	if code := Main([]string{"version", "x"}); code != 2 {
+		t.Errorf("version with args exit = %d, want 2", code)
+	}
 }
 
 func TestAttachTargetSkipsWrappers(t *testing.T) {
@@ -134,5 +138,26 @@ func TestAttachTargetSkipsWrappers(t *testing.T) {
 	}
 	if got == w || got == "" {
 		t.Errorf("attachTarget = %q with only wrapper %s", got, w)
+	}
+}
+
+func TestVersionString(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "(devel)"},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "abc123"},
+			{Key: "vcs.modified", Value: "true"},
+		},
+	}
+	if got, want := versionString(info, true), "ssmux dev (abc123-dirty)"; got != want {
+		t.Errorf("build info: got %q, want %q", got, want)
+	}
+	if got, want := versionString(nil, false), "ssmux dev (unknown)"; got != want {
+		t.Errorf("no build info: got %q, want %q", got, want)
+	}
+	Version, Commit = "1.2.3", "def456"
+	t.Cleanup(func() { Version, Commit = "", "" })
+	if got, want := versionString(info, true), "ssmux 1.2.3 (def456)"; got != want {
+		t.Errorf("ldflags: got %q, want %q", got, want)
 	}
 }
