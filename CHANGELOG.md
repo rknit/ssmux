@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/rknit/ssmux/compare/v1.3.0...v1.3.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* reduce popup and slot switch latency ([dd765d6](https://github.com/rknit/ssmux/commit/dd765d69a3ee284bbf850ab6a74e475a4c8c838c))
+
 ## [1.3.0](https://github.com/rknit/ssmux/compare/v1.2.0...v1.3.0) (2026-10-28)
 
 
