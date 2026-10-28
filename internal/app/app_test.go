@@ -179,6 +179,20 @@ func TestAttachTargetSkipsWrappers(t *testing.T) {
 	}
 }
 
+func TestPaneTerm(t *testing.T) {
+	c := testutil.NewServer(t)
+	if _, err := c.Run("set-option", "-g", "default-terminal", "tmux-256color"); err != nil {
+		t.Fatal(err)
+	}
+	if got := paneTerm(c, "xterm-ghostty"); got != "tmux-256color" {
+		t.Errorf("paneTerm = %q, want tmux-256color", got)
+	}
+	none := tmux.Client{Socket: c.Socket + "-none"}
+	if got := paneTerm(none, "xterm-ghostty"); got != "xterm-ghostty" {
+		t.Errorf("paneTerm without server = %q, want xterm-ghostty", got)
+	}
+}
+
 func TestVersionString(t *testing.T) {
 	// the nix build sets Version through ldflags for tests too
 	origVersion := Version

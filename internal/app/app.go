@@ -106,6 +106,16 @@ func attachTarget(c tmux.Client, r remoteAttacher) (string, error) {
 	return c.NewSession("", home)
 }
 
+// paneTerm returns the TERM of a pane on c's server, which is what a
+// wrapper's ssh writes to, or fallback if the server has none to report.
+// Outside tmux, TERM names the outer terminal instead.
+func paneTerm(c tmux.Client, fallback string) string {
+	if t, err := c.GlobalOption("default-terminal"); err == nil && t != "" {
+		return t
+	}
+	return fallback
+}
+
 func executable() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -227,6 +237,7 @@ func attachOrOpen(c tmux.Client) error {
 	if err != nil {
 		return err
 	}
+	f.Term = paneTerm(c, f.Term)
 	target, err := attachTarget(c, f)
 	if err != nil {
 		return err
