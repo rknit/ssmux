@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rknit/ssmux/internal/fleet"
+	"github.com/rknit/ssmux/internal/hosts"
 	"github.com/rknit/ssmux/internal/slots"
 	"github.com/rknit/ssmux/internal/tmux"
 )
@@ -27,7 +28,8 @@ const (
 type Tmux interface {
 	Hosts() []fleet.HostStatus
 	RefreshHost(host string)
-	AddHost(dest string) error
+	AddHost(h hosts.Host) error
+	SetDests(host string, dests []string) error
 	RemoveHost(host string) error
 	Suggestions() []string
 	ListSessions() ([]tmux.Session, error)

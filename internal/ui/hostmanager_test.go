@@ -57,7 +57,7 @@ func TestHostManagerRows(t *testing.T) {
 		"│ FROM ~/.ssh/config",
 		"  staging",
 		"  prod",
-		"⏎ add  a type  d remove  Esc",
+		"⏎ add  a type  e edit  d remove  Esc",
 	} {
 		if !strings.Contains(box, s) {
 			t.Errorf("host manager missing %q:\n%s", s, box)
@@ -76,7 +76,7 @@ func TestAddSuggestion(t *testing.T) {
 		t.Fatalf("⏎ on a host added it: %v", f.calls)
 	}
 	m, cmd := press(t, m, "down", "down", "down", "down", "enter") // staging
-	if !slices.Contains(f.calls, "AddHost staging") {
+	if !slices.Contains(f.calls, "AddHost staging staging") {
 		t.Fatalf("calls = %v, want AddHost staging", f.calls)
 	}
 	box := strings.Join(topBox(t, m, "Hosts"), "\n")
@@ -100,7 +100,7 @@ func TestAddTyped(t *testing.T) {
 	}
 	m = typeText(t, m, "u@h")
 	m, cmd := press(t, m, "enter")
-	if !slices.Contains(f.calls, "AddHost u@h") {
+	if !slices.Contains(f.calls, "AddHost u@h u@h") {
 		t.Fatalf("calls = %v", f.calls)
 	}
 	if _, ok := m.top().(*inputDialog); !ok || len(m.dialogs) != 2 || cmd != nil {
@@ -120,6 +120,42 @@ func TestAddTyped(t *testing.T) {
 	}
 	if got := hostMsgs(cmd); len(got) != 1 || got[0].host != "u@h" {
 		t.Errorf("refresh msgs = %+v, want u@h", got)
+	}
+}
+
+func TestAddTypedWithDests(t *testing.T) {
+	f := managerFake()
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "a")
+	m = typeText(t, m, "home 10.0.0.5 home.example.com")
+	m, _ = press(t, m, "enter")
+	if !slices.Contains(f.calls, "AddHost home 10.0.0.5 home.example.com") {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	hostManager(t, m)
+}
+
+func TestEditDests(t *testing.T) {
+	f := managerFake()
+	f.hosts[0].Dests, f.hosts[0].Dest = []string{"devbox"}, "devbox"
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "e")
+	d, ok := m.top().(*inputDialog)
+	if !ok || d.input.Value() != "devbox" {
+		t.Fatalf("top = %#v, want input holding devbox", m.top())
+	}
+	if box := strings.Join(topBox(t, m, "Destinations of devbox"), "\n"); !strings.Contains(box, "⏎ save") {
+		t.Errorf("edit box:\n%s", box)
+	}
+	m = typeText(t, m, " 10.0.0.9")
+	m, cmd := press(t, m, "enter")
+	if !slices.Contains(f.calls, "SetDests devbox devbox 10.0.0.9") {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	hostManager(t, m)
+	if got := hostMsgs(cmd); len(got) != 1 || got[0].host != "devbox" {
+		t.Errorf("refresh msgs = %+v, want devbox", got)
+	}
+	if !strings.Contains(plain(m), "devbox   connected via devbox") {
+		t.Errorf("destination not shown:\n%s", plain(m))
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rknit/ssmux/internal/fleet"
+	"github.com/rknit/ssmux/internal/hosts"
 	"github.com/rknit/ssmux/internal/tmux"
 )
 
@@ -104,12 +105,25 @@ func (f *fakeTmux) RefreshHost(name string) {
 	}
 }
 
-func (f *fakeTmux) AddHost(dest string) error {
-	f.record("AddHost %s", dest)
+func (f *fakeTmux) AddHost(h hosts.Host) error {
+	f.record("AddHost %s", strings.Join(append([]string{h.Name}, h.Dests...), " "))
 	if err := f.errs["AddHost"]; err != nil {
 		return err
 	}
-	f.hosts = append(f.hosts, fleet.HostStatus{Name: dest})
+	f.hosts = append(f.hosts, fleet.HostStatus{Name: h.Name, Dests: h.Dests, Dest: h.Dests[0]})
+	return nil
+}
+
+func (f *fakeTmux) SetDests(name string, dests []string) error {
+	f.record("SetDests %s %s", name, strings.Join(dests, " "))
+	if err := f.errs["SetDests"]; err != nil {
+		return err
+	}
+	for i := range f.hosts {
+		if f.hosts[i].Name == name {
+			f.hosts[i].Dests, f.hosts[i].Dest = dests, dests[0]
+		}
+	}
 	return nil
 }
 

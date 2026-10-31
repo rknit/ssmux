@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rknit/ssmux/internal/fleet"
+	"github.com/rknit/ssmux/internal/hosts"
 	"github.com/rknit/ssmux/internal/testutil"
 	"github.com/rknit/ssmux/internal/tmux"
 )
@@ -373,14 +374,14 @@ func TestRemoveHostClearsState(t *testing.T) {
 func TestAddHost(t *testing.T) {
 	e := newEnv(t)
 	f := e.fleet()
-	if err := f.AddHost("dev"); err != nil {
+	if err := f.AddHost(hosts.Host{Name: "dev", Dests: []string{"dev"}}); err != nil {
 		t.Fatal(err)
 	}
 	h := f.Hosts()
 	if len(h) != 3 || h[2].Name != "dev" || h[2].State != fleet.Connecting {
 		t.Errorf("Hosts = %+v", h)
 	}
-	if err := f.AddHost("a/b"); err == nil {
+	if err := f.AddHost(hosts.Host{Name: "a/b", Dests: []string{"a"}}); err == nil {
 		t.Error("AddHost accepted '/'")
 	}
 }
@@ -431,5 +432,65 @@ func TestRefreshHostWithoutServer(t *testing.T) {
 	f.RefreshHost("box")
 	if h := f.Hosts()[1]; h.State != fleet.Connected || h.Err != "" {
 		t.Errorf("box after killing all = %+v", h)
+	}
+}
+
+// A host tries its destinations in order and sticks with the one that
+// answers; sessions and pins are keyed by the host name, not the destination.
+func TestHostDestFallback(t *testing.T) {
+	_, remote := testutil.FakeSSH(t)
+	path := filepath.Join(t.TempDir(), "hosts")
+	if err := os.WriteFile(path, []byte("home lan wan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wan := remote("wan")
+	id := must(t)(wan.NewSession("api", ""))
+	var dialed []string
+	f := fleet.New(testutil.NewServer(t), path, "", func(d string) tmux.Client {
+		dialed = append(dialed, d)
+		if d == "lan" { // unreachable: every call fails
+			return tmux.Client{Host: "lan", SSH: "/nonexistent/ssh"}
+		}
+		return remote(d)
+	})
+	if h := f.Hosts()[0]; h.Name != "home" || h.Dest != "lan" || len(h.Dests) != 2 {
+		t.Fatalf("Hosts = %+v", h)
+	}
+	f.RefreshHost("home")
+	h := f.Hosts()[0]
+	if h.State != fleet.Connected || h.Dest != "wan" {
+		t.Fatalf("home = %+v", h)
+	}
+	q := fleet.Qualify("home", id)
+	if s, ok := find(list(t, f), q); !ok || s.Name != "api" || s.Host != "home" {
+		t.Fatalf("%s not listed: %+v", q, list(t, f))
+	}
+	if err := f.SetSlot(q, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Resolve(q); err != nil {
+		t.Errorf("Resolve through wan: %v", err)
+	}
+
+	// The current destination is tried first on the next refresh.
+	dialed = nil
+	f.RefreshHost("home")
+	if len(dialed) != 1 || dialed[0] != "wan" {
+		t.Errorf("dialed %v, want only wan", dialed)
+	}
+
+	if err := f.SetDests("home", []string{"lan"}); err != nil {
+		t.Fatal(err)
+	}
+	f.RefreshHost("home")
+	if h := f.Hosts()[0]; h.State != fleet.Unreachable || h.Dest != "lan" {
+		t.Errorf("home after SetDests = %+v", h)
+	}
+	if s, ok := find(list(t, f), q); !ok || s.Slot != 3 {
+		t.Errorf("pin lost: %+v", list(t, f))
+	}
+	b, _ := os.ReadFile(path)
+	if string(b) != "home lan\n" {
+		t.Errorf("hosts file = %q", b)
 	}
 }

@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -27,7 +28,11 @@ const (
 )
 
 type HostStatus struct {
-	Name         string
+	Name string
+	// Dests are the host's ssh destinations, tried in order.
+	Dests []string
+	// Dest is the destination in use: the last one that answered.
+	Dest         string
 	State        State
 	Err          string
 	TermFallback bool
@@ -50,7 +55,7 @@ type Fleet struct {
 	local     tmux.Client
 	hostsPath string
 	sshDir    string
-	remote    func(host string) tmux.Client
+	dial      func(dest string) tmux.Client
 
 	// Term is the local TERM that wrappers pass to ssh.
 	Term string
@@ -60,19 +65,51 @@ type Fleet struct {
 	hosts []*host
 }
 
-// New loads the hosts file; every host starts out Connecting. remote builds
-// the client for a host, and its Timeout bounds every remote call.
-func New(local tmux.Client, hostsPath, sshDir string, remote func(host string) tmux.Client) *Fleet {
-	f := &Fleet{local: local, hostsPath: hostsPath, sshDir: sshDir, remote: remote, Term: os.Getenv("TERM")}
-	names, _ := hosts.Load(hostsPath)
-	for _, n := range names {
-		f.hosts = append(f.hosts, newHost(n))
+// New loads the hosts file; every host starts out Connecting. dial builds
+// the client for an ssh destination, and its Timeout bounds every remote
+// call.
+func New(local tmux.Client, hostsPath, sshDir string, dial func(dest string) tmux.Client) *Fleet {
+	f := &Fleet{local: local, hostsPath: hostsPath, sshDir: sshDir, dial: dial, Term: os.Getenv("TERM")}
+	hs, _ := hosts.Load(hostsPath)
+	for _, h := range hs {
+		f.hosts = append(f.hosts, newHost(h))
 	}
 	return f
 }
 
-func newHost(name string) *host {
-	return &host{HostStatus: HostStatus{Name: name}, names: map[string]string{}, switched: map[string]switched{}}
+func newHost(h hosts.Host) *host {
+	return &host{
+		HostStatus: HostStatus{Name: h.Name, Dests: h.Dests, Dest: h.Dests[0]},
+		names:      map[string]string{}, switched: map[string]switched{},
+	}
+}
+
+// remote returns the client for the host named name through its current
+// destination. An unknown name is used as the destination.
+func (f *Fleet) remote(name string) tmux.Client {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.host(name); h != nil {
+		return f.dial(h.Dest)
+	}
+	return f.dial(name)
+}
+
+// dests returns the host's destinations, the current one first.
+func (f *Fleet) dests(name string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.host(name)
+	if h == nil {
+		return nil
+	}
+	out := []string{h.Dest}
+	for _, d := range h.Dests {
+		if d != h.Dest {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // host returns the cached host named name, or nil. Callers hold mu.
@@ -97,13 +134,29 @@ func (f *Fleet) Hosts() []HostStatus {
 }
 
 // RefreshHost lists the host's sessions over ssh and caches the result.
-// It blocks for up to the remote client's Timeout.
+// It tries the current destination first, then the others in order, and
+// makes the first that answers current. It blocks for up to the remote
+// client's Timeout per destination tried.
 func (f *Fleet) RefreshHost(name string) {
 	seq, gen, ok := f.startRefresh(name)
 	if !ok {
 		return
 	}
-	ss, err := f.remote(name).ListSessions()
+	var (
+		ss   []tmux.Session
+		err  error
+		dest string
+		errs []error
+	)
+	for _, dest = range f.dests(name) {
+		if ss, err = f.dial(dest).ListSessions(); err == nil {
+			break
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", dest, err))
+	}
+	if err != nil && len(errs) > 1 {
+		err = errors.Join(errs...)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h := f.host(name)
@@ -115,7 +168,13 @@ func (f *Fleet) RefreshHost(name string) {
 		h.State, h.Err, h.sessions = Unreachable, err.Error(), nil
 		return
 	}
+	for i := range ss {
+		ss[i].Host = name // the client sets the destination
+	}
 	ss = h.withSwitched(ss, gen)
+	if slices.Contains(h.Dests, dest) {
+		h.Dest = dest
+	}
 	h.State, h.Err, h.sessions = Connected, "", ss
 	for _, s := range ss {
 		h.names[s.ID] = s.Name
@@ -397,26 +456,47 @@ func (f *Fleet) Display(client, msg string) error {
 	return f.local.Display(client, msg)
 }
 
-// AddHost appends dest to the hosts file and starts tracking it.
-func (f *Fleet) AddHost(dest string) error {
+// AddHost appends h to the hosts file and starts tracking it.
+func (f *Fleet) AddHost(h hosts.Host) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := hosts.Add(f.hostsPath, dest); err != nil {
+	if err := hosts.Add(f.hostsPath, h); err != nil {
 		return err
 	}
-	f.hosts = append(f.hosts, newHost(dest))
+	f.hosts = append(f.hosts, newHost(h))
 	return nil
 }
 
-// Suggestions lists ~/.ssh/config hosts that are not configured yet.
+// SetDests replaces the host's destinations. Its sessions, pins and wrappers
+// stay, since they belong to the host, not to a destination. The current
+// destination is kept if it is still listed.
+func (f *Fleet) SetDests(name string, dests []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.host(name)
+	if h == nil {
+		return fmt.Errorf("unknown host %s", name)
+	}
+	if err := hosts.SetDests(f.hostsPath, name, dests); err != nil {
+		return err
+	}
+	h.Dests = slices.Clone(dests)
+	if !slices.Contains(dests, h.Dest) {
+		h.Dest = dests[0]
+	}
+	return nil
+}
+
+// Suggestions lists ~/.ssh/config hosts that are not configured yet, as a
+// name or as a destination.
 func (f *Fleet) Suggestions() []string {
 	f.mu.Lock()
-	names := make([]string, len(f.hosts))
-	for i, h := range f.hosts {
-		names[i] = h.Name
+	var used []string
+	for _, h := range f.hosts {
+		used = append(append(used, h.Name), h.Dests...)
 	}
 	f.mu.Unlock()
-	return hosts.Suggestions(f.sshDir, names)
+	return hosts.Suggestions(f.sshDir, used)
 }
 
 // RemoveHost kills the host's wrappers and drops the host from the hosts
