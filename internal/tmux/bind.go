@@ -13,7 +13,14 @@ func ShellQuote(s string) string {
 // BindKeys registers ssmux's root-table bindings on the server. tmux replaces
 // an existing binding for the same key, so calling it again is harmless and
 // refreshes the binary path.
+//
+// It also turns detach-on-destroy off, so a client whose session ends (its
+// last shell exits) moves to another session and only leaves tmux when no
+// session is left.
 func (c Client) BindKeys(exe string) error {
+	if err := c.SetGlobalOption("detach-on-destroy", "off"); err != nil {
+		return err
+	}
 	bin := ShellQuote(exe)
 	open := bin + " open --client '#{client_name}'"
 	for _, key := range []string{"M-a", "M-Up"} {

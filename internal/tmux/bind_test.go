@@ -36,4 +36,7 @@ func TestBindKeys(t *testing.T) {
 	if second, _ := c.Run("list-keys", "-T", "root"); second != first {
 		t.Errorf("BindKeys not idempotent")
 	}
+	if v, _ := c.GlobalOption("detach-on-destroy"); v != "off" {
+		t.Errorf("detach-on-destroy = %q, want off", v)
+	}
 }
