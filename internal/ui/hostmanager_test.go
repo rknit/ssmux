@@ -57,7 +57,7 @@ func TestHostManagerRows(t *testing.T) {
 		"│ FROM ~/.ssh/config",
 		"  staging",
 		"  prod",
-		"⏎ add  a type  e edit  d remove  Esc",
+		"a address  d remove  n new  Esc",
 	} {
 		if !strings.Contains(box, s) {
 			t.Errorf("host manager missing %q:\n%s", s, box)
@@ -83,7 +83,7 @@ func TestAddSuggestion(t *testing.T) {
 	if !regexp.MustCompile(`staging +connecting`).MatchString(box) {
 		t.Errorf("staging not listed as connecting:\n%s", box)
 	}
-	if strings.Count(box, "staging") != 1 {
+	if strings.Contains(box[strings.Index(box, "FROM"):], "staging") {
 		t.Errorf("staging still suggested:\n%s", box)
 	}
 	if got := hostMsgs(cmd); len(got) != 1 || got[0].host != "staging" || !slices.Contains(f.calls, "RefreshHost staging") {
@@ -94,7 +94,7 @@ func TestAddSuggestion(t *testing.T) {
 func TestAddTyped(t *testing.T) {
 	f := managerFake()
 	f.errs["AddHost"] = errFake("bad destination")
-	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "a")
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "n")
 	if _, ok := m.top().(*inputDialog); !ok {
 		t.Fatalf("top = %#v, want input dialog", m.top())
 	}
@@ -125,7 +125,7 @@ func TestAddTyped(t *testing.T) {
 
 func TestAddTypedWithDests(t *testing.T) {
 	f := managerFake()
-	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "a")
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "n")
 	m = typeText(t, m, "home 10.0.0.5 home.example.com")
 	m, _ = press(t, m, "enter")
 	if !slices.Contains(f.calls, "AddHost home 10.0.0.5 home.example.com") {
@@ -134,28 +134,101 @@ func TestAddTypedWithDests(t *testing.T) {
 	hostManager(t, m)
 }
 
-func TestEditDests(t *testing.T) {
-	f := managerFake()
-	f.hosts[0].Dests, f.hosts[0].Dest = []string{"devbox"}, "devbox"
-	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "e")
-	d, ok := m.top().(*inputDialog)
-	if !ok || d.input.Value() != "devbox" {
-		t.Fatalf("top = %#v, want input holding devbox", m.top())
+// destFake has home with two addresses, connected through the second.
+func destFake() *fakeTmux {
+	f := newFake()
+	f.hosts = []fleet.HostStatus{
+		{Name: "home", Dests: []string{"home", "home.vpn"}, Dest: "home.vpn", State: fleet.Connected},
+		{Name: "box", Dests: []string{"10.0.0.5"}, Dest: "10.0.0.5", State: fleet.Unreachable},
 	}
-	if box := strings.Join(topBox(t, m, "Destinations of devbox"), "\n"); !strings.Contains(box, "⏎ save") {
-		t.Errorf("edit box:\n%s", box)
+	f.suggest = []string{"staging"}
+	return f
+}
+
+func TestAddressRows(t *testing.T) {
+	m, _ := press(t, sized(New(destFake(), "c"), 100, 30), "h", "down")
+	box := strings.Join(topBox(t, m, "Hosts"), "\n")
+	for _, re := range []string{
+		`home +connected`, `▸ ○ home\b`, `  ● home\.vpn`, `box +unreachable`, `  ○ 10\.0\.0\.5`,
+		`a address  d remove  J/K order  n new  Esc`,
+	} {
+		if !regexp.MustCompile(re).MatchString(box) {
+			t.Errorf("missing %q:\n%s", re, box)
+		}
 	}
-	m = typeText(t, m, " 10.0.0.9")
+	m, _ = press(t, m, "down", "down", "down", "down") // staging
+	if box := strings.Join(topBox(t, m, "Hosts"), "\n"); !strings.Contains(box, "⏎ add  m merge  n new  Esc") {
+		t.Errorf("suggestion hints:\n%s", box)
+	}
+}
+
+func TestAddAddress(t *testing.T) {
+	f := destFake()
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "down", "down", "down", "a") // on box
+	if box := strings.Join(topBox(t, m, "Add address to box"), "\n"); !strings.Contains(box, "⏎ add") {
+		t.Errorf("add box:\n%s", box)
+	}
+	m = typeText(t, m, "box.vpn")
 	m, cmd := press(t, m, "enter")
-	if !slices.Contains(f.calls, "SetDests devbox devbox 10.0.0.9") {
+	if !slices.Contains(f.calls, "SetDests box 10.0.0.5 box.vpn") {
 		t.Fatalf("calls = %v", f.calls)
 	}
-	hostManager(t, m)
-	if got := hostMsgs(cmd); len(got) != 1 || got[0].host != "devbox" {
-		t.Errorf("refresh msgs = %+v, want devbox", got)
+	d := hostManager(t, m)
+	if got := hostMsgs(cmd); len(got) != 1 || got[0].host != "box" {
+		t.Errorf("refresh msgs = %+v, want box", got)
 	}
-	if !strings.Contains(plain(m), "devbox   connected via devbox") {
-		t.Errorf("destination not shown:\n%s", plain(m))
+	if it, _ := d.selected(d.items(m)); it.host.Name != "box" || it.dest != 1 {
+		t.Errorf("cursor on %+v, want box.vpn", it)
+	}
+}
+
+func TestRemoveAndOrderAddress(t *testing.T) {
+	f := destFake()
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "down", "J")
+	if !slices.Contains(f.calls, "SetDests home home.vpn home") {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	d := hostManager(t, m)
+	if it, _ := d.selected(d.items(m)); it.dest != 1 {
+		t.Errorf("cursor did not follow the moved address: %+v", it)
+	}
+	m, _ = press(t, m, "J") // already last
+	if f.called("SetDests home home home.vpn") {
+		t.Errorf("J past the end moved: %v", f.calls)
+	}
+	m, _ = press(t, m, "d")
+	if !slices.Contains(f.calls, "SetDests home home.vpn") {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	m, _ = press(t, m, "d") // last address
+	if box := strings.Join(topBox(t, m, "Hosts"), "\n"); !strings.Contains(box, "a host needs an address") {
+		t.Errorf("last address removed:\n%s", box)
+	}
+	if _, ok := m.top().(*confirmDialog); ok {
+		t.Errorf("d on an address asked to remove the host")
+	}
+}
+
+func TestMergeSuggestion(t *testing.T) {
+	f := destFake()
+	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "down", "down", "down", "down", "down", "m")
+	if _, ok := m.top().(*hostPickerDialog); !ok {
+		t.Fatalf("top = %#v, want host picker", m.top())
+	}
+	box := strings.Join(topBox(t, m, "Merge staging into"), "\n")
+	if strings.Contains(box, "local") || strings.Contains(box, "Manage") {
+		t.Errorf("merge picker lists more than hosts:\n%s", box)
+	}
+	m, cmd := press(t, m, "down", "enter") // box, though unreachable
+	if !slices.Contains(f.calls, "SetDests box 10.0.0.5 staging") {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	d := hostManager(t, m)
+	if got := hostMsgs(cmd); len(got) != 1 || got[0].host != "box" {
+		t.Errorf("refresh msgs = %+v, want box", got)
+	}
+	if it, _ := d.selected(d.items(m)); it.host.Name != "box" || it.dest != 1 {
+		t.Errorf("cursor on %+v, want box's staging", it)
 	}
 }
 
@@ -230,7 +303,7 @@ func TestReaddedHostHasOneLoop(t *testing.T) {
 		t.Fatalf("no ci refresh from Init")
 	}
 	m, _ = press(t, m, "h", "down", "d", "y")
-	m, _ = press(t, m, "a")
+	m, _ = press(t, m, "n")
 	m = typeText(t, m, "ci")
 	m, cmd := press(t, m, "enter")
 	fresh := hostMsgs(cmd)

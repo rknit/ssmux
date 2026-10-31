@@ -16,6 +16,7 @@ type hostItem struct {
 	state  fleet.State
 	local  bool
 	manage bool // the "Manage hosts…" line
+	any    bool // pickable whatever its state
 }
 
 func (it hostItem) label() string {
@@ -27,7 +28,7 @@ func (it hostItem) label() string {
 
 // pickable reports whether ⏎ on it chooses it as the host.
 func (it hostItem) pickable() bool {
-	return !it.manage && (it.local || it.state != fleet.Unreachable)
+	return !it.manage && (it.local || it.any || it.state != fleet.Unreachable)
 }
 
 var stateText = map[fleet.State]string{
@@ -41,6 +42,12 @@ type hostPickerDialog struct {
 	filter string
 	cursor int
 	onPick func(host string)
+	// onPickCmd, if set, runs instead of onPick and returns a command.
+	onPickCmd func(m *Model, host string) tea.Cmd
+	// hostsOnly lists only the configured hosts, all pickable, without
+	// local or "Manage hosts…".
+	hostsOnly bool
+	title     string // "" means "Host"
 	// onManage runs on ⏎ over "Manage hosts…". Nil does nothing.
 	onManage func(m *Model) tea.Cmd
 }
@@ -64,21 +71,27 @@ func (p *hostPickerDialog) items(m Model) []hostItem {
 	match := func(label string) bool {
 		return strings.Contains(strings.ToLower(label), strings.ToLower(p.filter))
 	}
-	if match("local") {
+	if !p.hostsOnly && match("local") {
 		out = append(out, hostItem{local: true})
 	}
 	for _, h := range m.hosts {
 		if match(h.Name) {
-			out = append(out, hostItem{name: h.Name, state: h.State})
+			out = append(out, hostItem{name: h.Name, state: h.State, any: p.hostsOnly})
 		}
+	}
+	if p.hostsOnly {
+		return out
 	}
 	return append(out, hostItem{manage: true})
 }
 
 // selected clamps the cursor to items and returns the item under it.
-func (p *hostPickerDialog) selected(items []hostItem) hostItem {
+func (p *hostPickerDialog) selected(items []hostItem) (hostItem, bool) {
 	p.cursor = max(min(p.cursor, len(items)-1), 0)
-	return items[p.cursor]
+	if len(items) == 0 {
+		return hostItem{}, false
+	}
+	return items[p.cursor], true
 }
 
 func (p *hostPickerDialog) update(m *Model, k tea.KeyPressMsg) tea.Cmd {
@@ -89,14 +102,18 @@ func (p *hostPickerDialog) update(m *Model, k tea.KeyPressMsg) tea.Cmd {
 	case "down":
 		p.cursor++
 	case "enter":
-		it := p.selected(items)
+		it, ok := p.selected(items)
 		switch {
+		case !ok:
 		case it.manage:
 			if p.onManage != nil {
 				return p.onManage(m)
 			}
 		case it.pickable():
 			m.pop()
+			if p.onPickCmd != nil {
+				return p.onPickCmd(m, it.name)
+			}
 			p.onPick(it.name)
 		}
 		return nil
@@ -153,5 +170,9 @@ func (p *hostPickerDialog) view(m Model) string {
 		start := max(min(cur, len(items)-1)-fits+1, 0)
 		lines = append(lines[:1], lines[1+start:1+start+fits]...)
 	}
-	return drawBox("Host", lines, hintKeys("↑↓", "move", "⏎", "pick", "Esc", "back"), 24, w, h)
+	title := p.title
+	if title == "" {
+		title = "Host"
+	}
+	return drawBox(title, lines, hintKeys("↑↓", "move", "⏎", "pick", "Esc", "back"), 24, w, h)
 }
