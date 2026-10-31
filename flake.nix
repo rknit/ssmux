@@ -9,7 +9,7 @@
     packages = builtins.mapAttrs (system: pkgs: {
       ssmux = (pkgs.buildGoModule.override { go = pkgs.go_1_27; }) rec {
         pname = "ssmux";
-        version = "1.3.4"; # x-release-please-version
+        version = "1.4.0"; # x-release-please-version
         src = ./.;
         ldflags = [
           "-X github.com/rknit/ssmux/internal/app.Version=${version}"
