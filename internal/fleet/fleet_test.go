@@ -3,8 +3,10 @@ package fleet_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rknit/ssmux/internal/fleet"
 	"github.com/rknit/ssmux/internal/hosts"
@@ -435,7 +437,7 @@ func TestRefreshHostWithoutServer(t *testing.T) {
 	}
 }
 
-// A host tries its destinations in order and sticks with the one that
+// A host tries its destinations in parallel and sticks with the one that
 // answers; sessions and pins are keyed by the host name, not the destination.
 func TestHostDestFallback(t *testing.T) {
 	_, remote := testutil.FakeSSH(t)
@@ -472,11 +474,11 @@ func TestHostDestFallback(t *testing.T) {
 		t.Errorf("Resolve through wan: %v", err)
 	}
 
-	// The current destination is tried first on the next refresh.
+	// Every destination is tried on each refresh.
 	dialed = nil
 	f.RefreshHost("home")
-	if len(dialed) != 1 || dialed[0] != "wan" {
-		t.Errorf("dialed %v, want only wan", dialed)
+	if !slices.Equal(dialed, []string{"lan", "wan"}) {
+		t.Errorf("dialed %v, want lan and wan", dialed)
 	}
 
 	if err := f.SetDests("home", []string{"lan"}); err != nil {
@@ -492,5 +494,37 @@ func TestHostDestFallback(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if string(b) != "home lan\n" {
 		t.Errorf("hosts file = %q", b)
+	}
+}
+
+// With several destinations answering, the fastest wins even when it comes
+// later in the list, and all are tried at once rather than one by one.
+func TestHostDestFastestWins(t *testing.T) {
+	ssh, remote := testutil.FakeSSH(t)
+	slow := filepath.Join(t.TempDir(), "slowssh")
+	if err := os.WriteFile(slow, []byte("#!/bin/sh\nsleep 1\nexec "+ssh+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "hosts")
+	if err := os.WriteFile(path, []byte("home a b c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"a", "b", "c"} {
+		must(t)(remote(d).NewSession("s", ""))
+	}
+	f := fleet.New(testutil.NewServer(t), path, "", func(d string) tmux.Client {
+		c := remote(d)
+		if d != "b" {
+			c.SSH = slow
+		}
+		return c
+	})
+	start := time.Now()
+	f.RefreshHost("home")
+	if h := f.Hosts()[0]; h.State != fleet.Connected || h.Dest != "b" {
+		t.Fatalf("home = %+v, want connected through b", h)
+	}
+	if d := time.Since(start); d > 900*time.Millisecond {
+		t.Errorf("refresh took %v, want the fast destination's time", d)
 	}
 }

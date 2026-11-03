@@ -29,7 +29,8 @@ const (
 
 type HostStatus struct {
 	Name string
-	// Dests are the host's ssh destinations, tried in order.
+	// Dests are the host's ssh destinations, tried in parallel; ties go to
+	// the earliest.
 	Dests []string
 	// Dest is the destination in use: the last one that answered.
 	Dest         string
@@ -95,21 +96,56 @@ func (f *Fleet) remote(name string) tmux.Client {
 	return f.dial(name)
 }
 
-// dests returns the host's destinations, the current one first.
+// dests returns the host's destinations in config order.
 func (f *Fleet) dests(name string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	h := f.host(name)
-	if h == nil {
-		return nil
+	if h := f.host(name); h != nil {
+		return slices.Clone(h.Dests)
 	}
-	out := []string{h.Dest}
-	for _, d := range h.Dests {
-		if d != h.Dest {
-			out = append(out, d)
+	return nil
+}
+
+// probe lists sessions through every destination at once and returns the
+// result of the first to answer; answers that arrive together go to the
+// earliest in dests. When none answers it returns every error, in order.
+func (f *Fleet) probe(dests []string) (string, []tmux.Session, error) {
+	type result struct {
+		i   int
+		ss  []tmux.Session
+		err error
+	}
+	ch := make(chan result, len(dests))
+	for i, d := range dests {
+		c := f.dial(d)
+		go func() {
+			ss, err := c.ListSessions()
+			ch <- result{i, ss, err}
+		}()
+	}
+	errs := make([]error, len(dests))
+	for range dests {
+		r := <-ch
+		if r.err != nil {
+			errs[r.i] = fmt.Errorf("%s: %w", dests[r.i], r.err)
+			continue
 		}
+		for drained := false; !drained; {
+			select {
+			case o := <-ch:
+				if o.err == nil && o.i < r.i {
+					r = o
+				}
+			default:
+				drained = true
+			}
+		}
+		return dests[r.i], r.ss, nil
 	}
-	return out
+	if len(errs) == 1 {
+		return "", nil, errors.Unwrap(errs[0])
+	}
+	return "", nil, errors.Join(errs...)
 }
 
 // host returns the cached host named name, or nil. Callers hold mu.
@@ -134,29 +170,14 @@ func (f *Fleet) Hosts() []HostStatus {
 }
 
 // RefreshHost lists the host's sessions over ssh and caches the result.
-// It tries the current destination first, then the others in order, and
-// makes the first that answers current. It blocks for up to the remote
-// client's Timeout per destination tried.
+// It tries all its destinations in parallel and makes the first that
+// answers current. It blocks for up to the remote client's Timeout.
 func (f *Fleet) RefreshHost(name string) {
 	seq, gen, ok := f.startRefresh(name)
 	if !ok {
 		return
 	}
-	var (
-		ss   []tmux.Session
-		err  error
-		dest string
-		errs []error
-	)
-	for _, dest = range f.dests(name) {
-		if ss, err = f.dial(dest).ListSessions(); err == nil {
-			break
-		}
-		errs = append(errs, fmt.Errorf("%s: %w", dest, err))
-	}
-	if err != nil && len(errs) > 1 {
-		err = errors.Join(errs...)
-	}
+	dest, ss, err := f.probe(f.dests(name))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h := f.host(name)
