@@ -162,6 +162,21 @@ func TestAddressRows(t *testing.T) {
 	}
 }
 
+// The box keeps its size as the cursor moves between rows with different
+// hints, including while scrolled on a short screen.
+func TestHostManagerStableSize(t *testing.T) {
+	for _, h := range []int{30, 7} {
+		m, _ := press(t, sized(New(destFake(), "c"), 100, h), "h")
+		want := findBox(t, m, "Hosts")
+		for i := range 6 {
+			m, _ = press(t, m, "down")
+			if b := findBox(t, m, "Hosts"); b.w != want.w || b.h != want.h {
+				t.Fatalf("height %d, after %d downs: box %dx%d, want %dx%d", h, i+1, b.w, b.h, want.w, want.h)
+			}
+		}
+	}
+}
+
 func TestAddAddress(t *testing.T) {
 	f := destFake()
 	m, _ := press(t, sized(New(f, "c"), 100, 30), "h", "down", "down", "down", "a") // on box

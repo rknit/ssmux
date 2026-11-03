@@ -258,6 +258,15 @@ func (d *hostManagerDialog) view(m Model) string {
 			lines = append(lines, indent+"  "+style.Render(label))
 		}
 	}
+	// Size the box from every line and every hint variant, not just what is
+	// visible now, so it keeps its size as the cursor moves.
+	minInner := 34
+	for _, l := range lines {
+		minInner = max(minInner, ansi.StringWidth(l))
+	}
+	for _, v := range []managerItem{{suggestion: true}, {dest: 0}, {dest: -1}} {
+		minInner = max(minInner, ansi.StringWidth(d.hints(v, true, m))+3)
+	}
 	// Scroll so the cursor stays visible when the screen is short.
 	fits := h - 2
 	if d.err != "" {
@@ -271,7 +280,7 @@ func (d *hostManagerDialog) view(m Model) string {
 		lines = append(lines, errStyle.Render(d.err))
 	}
 	it, ok := d.selected(items)
-	return drawBox("Hosts", lines, d.hints(it, ok, m), 34, w, h)
+	return drawBox("Hosts", lines, d.hints(it, ok, m), minInner, w, h)
 }
 
 // inputDialog asks for one line of text. onSubmit's error keeps it open and
